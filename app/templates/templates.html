@@ -22,10 +22,10 @@
   </div>
 
   <div class="stats">
-    <span class="pill">Активных: {{ active_count }}</span>
-    <span class="pill">Всего: {{ configs | length }}</span>
-    <span class="pill count">Закрепленных пользователей: {{ assigned_count }}</span>
-    <span class="pill">Последний индекс: {{ state.last_index if state else -1 }}</span>
+    <span class="pill">Активных: <span data-stat-active>{{ active_count }}</span></span>
+    <span class="pill">Всего: <span data-stat-total>{{ configs | length }}</span></span>
+    <span class="pill count">Активных пользователей: <span data-stat-assigned>{{ assigned_count }}</span></span>
+    <span class="pill">Последний индекс: <span data-stat-last-index>{{ state.last_index if state else -1 }}</span></span>
   </div>
 
   <section class="grid template-grid">
@@ -38,7 +38,8 @@
               <h3>{{ config.name }}</h3>
               <div class="actions">
                 <span class="pill"><span class="dot {{ 'on' if config.is_active else 'off' }}" data-status-dot></span><span data-status-text>{{ "в выдаче" if config.is_active else "выключен" }}</span></span>
-                <span class="pill count"><span data-assigned-count>{{ item.assigned_count }}</span> пользователей</span>
+                <span class="pill count"><span data-assigned-count>{{ item.assigned_count }}</span> активных</span>
+                <span class="pill"><span data-recent-count>{{ item.recent_count }}</span> за 30 сек</span>
                 <span class="pill">ID {{ config.id }}</span>
                 <span class="pill">#{{ config.sort_order }}</span>
               </div>
@@ -50,12 +51,12 @@
             </label>
           </div>
 
-          <p class="small muted">Inbound-ы</p>
-          <div class="inbound-list">
-            {% for inbound in item.inbounds %}
-              <span class="inbound-chip">{{ inbound }}</span>
+          <p class="small muted">Outbound-ы</p>
+          <div class="tag-list" data-outbound-list>
+            {% for outbound in item.outbounds %}
+              <span class="tag-chip">{{ outbound }}</span>
             {% else %}
-              <span class="inbound-chip">нет inbound-ов</span>
+              <span class="tag-chip">нет outbound-ов</span>
             {% endfor %}
           </div>
         </div>
@@ -79,6 +80,70 @@
 
 {% block scripts %}
   <script>
+    function renderOutboundTags(card, outbounds) {
+      const list = card.querySelector("[data-outbound-list]");
+      if (!list) return;
+      const tags = Array.isArray(outbounds) && outbounds.length ? outbounds : ["нет outbound-ов"];
+      list.innerHTML = "";
+      tags.forEach((tag) => {
+        const chip = document.createElement("span");
+        chip.className = "tag-chip";
+        chip.textContent = tag;
+        list.appendChild(chip);
+      });
+    }
+
+    function applyTemplatesPayload(payload) {
+      document.querySelector("[data-stat-active]").textContent = payload.active_count;
+      document.querySelector("[data-stat-total]").textContent = payload.configs.length;
+      document.querySelector("[data-stat-assigned]").textContent = payload.assigned_count;
+      document.querySelector("[data-stat-last-index]").textContent = payload.last_index;
+
+      payload.configs.forEach((config) => {
+        const card = document.querySelector(`[data-template-card="${config.id}"]`);
+        if (!card) return;
+
+        const toggle = card.querySelector("[data-template-toggle]");
+        const dot = card.querySelector("[data-status-dot]");
+        const text = card.querySelector("[data-status-text]");
+        const assignedCount = card.querySelector("[data-assigned-count]");
+        const recentCount = card.querySelector("[data-recent-count]");
+
+        if (toggle && !toggle.disabled) {
+          toggle.checked = config.is_active;
+        }
+        if (dot) {
+          dot.className = `dot ${config.is_active ? "on" : "off"}`;
+        }
+        if (text) {
+          text.textContent = config.is_active ? "в выдаче" : "выключен";
+        }
+        if (assignedCount) {
+          assignedCount.textContent = config.assigned_count;
+        }
+        if (recentCount) {
+          recentCount.textContent = config.recent_count;
+        }
+        renderOutboundTags(card, config.outbounds);
+      });
+    }
+
+    async function refreshTemplates() {
+      try {
+        const response = await fetch("/api/ui/config-templates", {
+          headers: { "Accept": "application/json" },
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        applyTemplatesPayload(await response.json());
+      } catch (error) {
+        console.warn("Не удалось обновить шаблоны", error);
+      }
+    }
+
+    setInterval(refreshTemplates, 5000);
+    refreshTemplates();
+
     document.querySelectorAll("[data-template-toggle]").forEach((toggle) => {
       toggle.addEventListener("change", async () => {
         const id = toggle.dataset.templateToggle;
@@ -121,6 +186,7 @@
           if (assignedCount && Number.isInteger(payload.cleared_assignments) && payload.cleared_assignments > 0) {
             assignedCount.textContent = "0";
           }
+          refreshTemplates();
         } catch (error) {
           toggle.checked = !nextState;
           alert("Не удалось переключить шаблон: " + error.message);

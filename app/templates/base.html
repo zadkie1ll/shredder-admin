@@ -225,13 +225,13 @@
         text-overflow: ellipsis;
         margin-bottom: 8px;
       }
-      .inbound-list {
+      .tag-list {
         display: flex;
         flex-wrap: wrap;
         gap: 7px;
         margin-top: 12px;
       }
-      .inbound-chip {
+      .tag-chip {
         max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -299,14 +299,12 @@
   <body>
     <main>
       <nav class="app-nav">
-        <a class="nav-brand" href="/">
+        <a class="nav-brand" href="/templates">
           <span class="brand-mark">S</span>
           <span>Shredder Admin</span>
         </a>
         <div class="nav-links">
-          <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">Обзор</a>
           <a class="nav-link {% if request.url.path.startswith('/templates') %}active{% endif %}" href="/templates">Шаблоны</a>
-          <button class="secondary" type="button" onclick="history.length > 1 ? history.back() : location.href='/'">Назад</button>
         </div>
       </nav>
       {% block body %}{% endblock %}

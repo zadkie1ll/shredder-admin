@@ -26,17 +26,20 @@
     </div>
   </div>
 
-  {% if inbounds %}
+  {% if outbounds %}
     <div class="card" style="margin-bottom: 16px;">
       <div class="template-head">
-        <h2>Inbound-ы</h2>
+        <h2>Outbound-ы</h2>
         {% if config %}
-          <span class="pill count">{{ assigned_count }} пользователей закреплено</span>
+          <div class="actions">
+            <span class="pill count">{{ assigned_count }} активных пользователей</span>
+            <span class="pill">{{ recent_count }} за 30 сек</span>
+          </div>
         {% endif %}
       </div>
-      <div class="inbound-list">
-        {% for inbound in inbounds %}
-          <span class="inbound-chip">{{ inbound }}</span>
+      <div class="tag-list">
+        {% for outbound in outbounds %}
+          <span class="tag-chip">{{ outbound }}</span>
         {% endfor %}
       </div>
     </div>

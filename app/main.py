@@ -1,3 +1,5 @@
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from secrets import compare_digest
 
@@ -17,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import delete
 from sqlalchemy import select
 from sqlalchemy import func
+from sqlalchemy import or_
 
 from app.config import settings
 from app.db import session_scope
@@ -70,38 +73,61 @@ def validate_json_template(content: str) -> None:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
 
 
-def get_inbound_tags(content: str) -> list[str]:
+def get_tag_list(content: str, section: str) -> list[str]:
     try:
         payload = orjson.loads(content)
     except orjson.JSONDecodeError:
         return []
 
-    inbounds = payload.get("inbounds", []) if isinstance(payload, dict) else []
-    if not isinstance(inbounds, list):
+    items = payload.get(section, []) if isinstance(payload, dict) else []
+    if not isinstance(items, list):
         return []
 
     tags = []
-    for inbound in inbounds:
-        if not isinstance(inbound, dict):
+    for item in items:
+        if not isinstance(item, dict):
             continue
-        tag = inbound.get("tag")
+        tag = item.get("tag")
         if isinstance(tag, str) and tag:
             tags.append(tag)
     return tags
 
 
-def get_assignment_counts(session) -> dict[int, int]:
+def get_outbound_tags(content: str) -> list[str]:
+    return get_tag_list(content, "outbounds")
+
+
+def get_active_assignment_counts(session) -> dict[int, int]:
     rows = session.execute(
         select(
             AdminConfigAssignment.template_id,
             func.count(AdminConfigAssignment.user_key),
-        ).group_by(AdminConfigAssignment.template_id)
+        )
+        .join(User, AdminConfigAssignment.user_id == User.id)
+        .where(or_(User.expire_at.is_(None), User.expire_at > func.now()))
+        .group_by(AdminConfigAssignment.template_id)
     ).all()
     return {template_id: count for template_id, count in rows}
 
 
-def list_configs_with_inbounds(session):
-    assignment_counts = get_assignment_counts(session)
+def get_recent_assignment_counts(session, seconds: int = 30) -> dict[int, int]:
+    threshold = datetime.utcnow() - timedelta(seconds=seconds)
+    rows = session.execute(
+        select(
+            AdminConfigAssignment.template_id,
+            func.count(AdminConfigAssignment.user_key),
+        )
+        .join(User, AdminConfigAssignment.user_id == User.id)
+        .where(or_(User.expire_at.is_(None), User.expire_at > func.now()))
+        .where(AdminConfigAssignment.last_seen_at >= threshold)
+        .group_by(AdminConfigAssignment.template_id)
+    ).all()
+    return {template_id: count for template_id, count in rows}
+
+
+def list_configs_with_outbounds(session):
+    assignment_counts = get_active_assignment_counts(session)
+    recent_counts = get_recent_assignment_counts(session)
     configs = (
         session.execute(
             select(AdminConfigTemplate).order_by(
@@ -115,8 +141,9 @@ def list_configs_with_inbounds(session):
     return [
         {
             "config": config,
-            "inbounds": get_inbound_tags(config.content),
+            "outbounds": get_outbound_tags(config.content),
             "assigned_count": assignment_counts.get(config.id, 0),
+            "recent_count": recent_counts.get(config.id, 0),
         }
         for config in configs
     ]
@@ -241,28 +268,15 @@ def startup() -> None:
     seed_template_if_needed()
 
 
-@app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_ui_auth)])
-def index(request: Request):
-    with session_scope() as session:
-        configs = list_configs_with_inbounds(session)
-        state = session.get(AdminConfigRotationState, "default")
-
-        return templates.TemplateResponse(
-            "index.html",
-            {
-                "request": request,
-                "configs": configs,
-                "active_count": active_configs_count(configs),
-                "assigned_count": assigned_users_count(configs),
-                "state": state,
-            },
-        )
+@app.get("/", dependencies=[Depends(require_ui_auth)])
+def index():
+    return RedirectResponse("/templates", status_code=303)
 
 
 @app.get("/templates", response_class=HTMLResponse, dependencies=[Depends(require_ui_auth)])
 def templates_list(request: Request):
     with session_scope() as session:
-        configs = list_configs_with_inbounds(session)
+        configs = list_configs_with_outbounds(session)
         state = session.get(AdminConfigRotationState, "default")
 
         return templates.TemplateResponse(
@@ -284,7 +298,9 @@ def new_template(request: Request):
         {
             "request": request,
             "config": None,
-            "inbounds": [],
+            "outbounds": [],
+            "assigned_count": 0,
+            "recent_count": 0,
             "action": "/configs",
         },
     )
@@ -302,8 +318,9 @@ def edit_template(request: Request, config_id: int):
             {
                 "request": request,
                 "config": config,
-                "inbounds": get_inbound_tags(config.content),
-                "assigned_count": get_assignment_counts(session).get(config.id, 0),
+                "outbounds": get_outbound_tags(config.content),
+                "assigned_count": get_active_assignment_counts(session).get(config.id, 0),
+                "recent_count": get_recent_assignment_counts(session).get(config.id, 0),
                 "action": f"/configs/{config.id}",
             },
         )
@@ -422,31 +439,51 @@ def reset_rotation():
     return RedirectResponse("/templates", status_code=303)
 
 
+def serialize_config_templates(session) -> list[dict]:
+    assignment_counts = get_active_assignment_counts(session)
+    recent_counts = get_recent_assignment_counts(session)
+    configs = (
+        session.execute(
+            select(AdminConfigTemplate).order_by(
+                AdminConfigTemplate.sort_order.asc(),
+                AdminConfigTemplate.id.asc(),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "id": config.id,
+            "name": config.name,
+            "is_active": config.is_active,
+            "sort_order": config.sort_order,
+            "assigned_count": assignment_counts.get(config.id, 0),
+            "recent_count": recent_counts.get(config.id, 0),
+            "outbounds": get_outbound_tags(config.content),
+            "updated_at": config.updated_at.isoformat() if config.updated_at else None,
+        }
+        for config in configs
+    ]
+
+
 @app.get("/api/config-templates")
 def list_config_templates(_: None = Depends(require_admin_token)):
     with session_scope() as session:
-        assignment_counts = get_assignment_counts(session)
-        configs = (
-            session.execute(
-                select(AdminConfigTemplate).order_by(
-                    AdminConfigTemplate.sort_order.asc(),
-                    AdminConfigTemplate.id.asc(),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return [
-            {
-                "id": config.id,
-                "name": config.name,
-                "is_active": config.is_active,
-                "sort_order": config.sort_order,
-                "assigned_count": assignment_counts.get(config.id, 0),
-                "updated_at": config.updated_at.isoformat() if config.updated_at else None,
-            }
-            for config in configs
-        ]
+        return serialize_config_templates(session)
+
+
+@app.get("/api/ui/config-templates", dependencies=[Depends(require_ui_auth)])
+def list_config_templates_for_ui():
+    with session_scope() as session:
+        configs = serialize_config_templates(session)
+        state = session.get(AdminConfigRotationState, "default")
+        return {
+            "configs": configs,
+            "active_count": sum(1 for config in configs if config["is_active"]),
+            "assigned_count": sum(config["assigned_count"] for config in configs),
+            "last_index": state.last_index if state else -1,
+        }
 
 
 @app.get("/api/config-templates/next")
