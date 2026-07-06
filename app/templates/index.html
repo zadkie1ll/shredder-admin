@@ -5,25 +5,142 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Shredder Admin</title>
     <style>
-      :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { margin: 0; background: #101722; color: #e8eef8; }
-      main { max-width: 1180px; margin: 0 auto; padding: 32px 20px 64px; }
-      h1 { margin: 0 0 8px; font-size: 30px; }
-      p { color: #9db0c8; }
-      .bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-      .card { background: #172231; border: 1px solid #2b3a4f; border-radius: 18px; padding: 18px; margin: 18px 0; box-shadow: 0 18px 50px rgba(0,0,0,.18); }
-      label { display: block; margin: 12px 0 6px; color: #b6c4d6; font-weight: 600; }
-      input[type="text"], input[type="number"], textarea { width: 100%; box-sizing: border-box; background: #0d1420; color: #f5f8ff; border: 1px solid #33445d; border-radius: 12px; padding: 10px 12px; font: inherit; }
-      textarea { min-height: 360px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.45; resize: vertical; }
-      button { background: #6f75ff; color: white; border: 0; border-radius: 12px; padding: 10px 14px; font-weight: 700; cursor: pointer; }
-      button.secondary { background: #2b3a4f; }
-      button.danger { background: #d95067; }
-      .row { display: grid; grid-template-columns: 1fr 120px 130px; gap: 12px; align-items: end; }
-      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
-      .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: #0d1420; color: #aebdd1; border: 1px solid #2b3a4f; }
-      .on { color: #87e39a; }
-      .off { color: #ff9eaa; }
-      .muted { color: #8393aa; }
+      :root {
+        color-scheme: dark;
+        font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --bg: #0c121d;
+        --card: #151f2e;
+        --card-2: #101826;
+        --border: #2a3a52;
+        --text: #edf4ff;
+        --muted: #91a3bd;
+        --accent: #747bff;
+        --accent-2: #8f94ff;
+        --good: #7ee39a;
+        --bad: #ff8194;
+        --warn: #ffd166;
+      }
+
+      body { margin: 0; background: radial-gradient(circle at top, #162239 0, var(--bg) 42%); color: var(--text); }
+      main { max-width: 1240px; margin: 0 auto; padding: 34px 20px 72px; }
+      h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -.03em; }
+      h2 { margin: 0; font-size: 22px; }
+      p { color: var(--muted); }
+      label { display: block; margin: 12px 0 6px; color: #bfd0e7; font-weight: 700; }
+      input[type="text"], input[type="number"], textarea {
+        width: 100%;
+        box-sizing: border-box;
+        background: #0b1220;
+        color: #f7fbff;
+        border: 1px solid #31445f;
+        border-radius: 14px;
+        padding: 11px 13px;
+        font: inherit;
+        outline: none;
+      }
+      input:-webkit-autofill,
+      input:-webkit-autofill:hover,
+      input:-webkit-autofill:focus {
+        -webkit-text-fill-color: #f7fbff;
+        -webkit-box-shadow: 0 0 0 1000px #0b1220 inset;
+        caret-color: #f7fbff;
+        transition: background-color 9999s ease-in-out 0s;
+      }
+      input[type="checkbox"] {
+        accent-color: var(--accent);
+      }
+      ::selection {
+        background: rgba(116,123,255,.35);
+        color: #ffffff;
+      }
+      ::-webkit-scrollbar {
+        width: 12px;
+        height: 12px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0b1220;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #2d3e59;
+        border: 3px solid #0b1220;
+        border-radius: 999px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #3b5172;
+      }
+      input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(116,123,255,.16); }
+      textarea {
+        min-height: 470px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        resize: vertical;
+        tab-size: 2;
+      }
+      button {
+        background: var(--accent);
+        color: white;
+        border: 0;
+        border-radius: 13px;
+        padding: 10px 14px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      button:hover { background: var(--accent-2); }
+      button.secondary { background: #26364d; }
+      button.secondary:hover { background: #314560; }
+      button.danger { background: #cf4e65; }
+      button.danger:hover { background: #e05b72; }
+      .bar { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+      .card {
+        background: linear-gradient(180deg, rgba(21,31,46,.98), rgba(16,24,38,.98));
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        padding: 20px;
+        margin: 18px 0;
+        box-shadow: 0 22px 70px rgba(0,0,0,.22);
+      }
+      .summary { display: flex; gap: 10px; flex-wrap: wrap; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        border-radius: 999px;
+        background: #0a111d;
+        color: #afc0d6;
+        border: 1px solid var(--border);
+        font-weight: 700;
+      }
+      .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--muted); }
+      .dot.on { background: var(--good); box-shadow: 0 0 18px rgba(126,227,154,.4); }
+      .dot.off { background: var(--bad); box-shadow: 0 0 18px rgba(255,129,148,.36); }
+      .grid { display: grid; grid-template-columns: minmax(0, 1fr) 130px 180px; gap: 12px; align-items: end; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+      .editor-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 14px; }
+      .editor-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .status { font-weight: 800; color: var(--muted); }
+      .status.ok { color: var(--good); }
+      .status.error { color: var(--bad); }
+      .muted { color: var(--muted); }
+      .switch {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 11px;
+        border-radius: 14px;
+        background: #0b1220;
+        border: 1px solid var(--border);
+      }
+      .switch input { transform: scale(1.2); }
+      .template-title { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
+      .template-meta { display: flex; gap: 8px; flex-wrap: wrap; }
+
+      @media (max-width: 780px) {
+        .bar, .template-title { align-items: flex-start; flex-direction: column; }
+        .grid { grid-template-columns: 1fr; }
+        textarea { min-height: 360px; }
+      }
     </style>
   </head>
   <body>
@@ -31,14 +148,14 @@
       <div class="bar">
         <div>
           <h1>Shredder Admin</h1>
-          <p>Ротация custom config templates для подписок.</p>
+          <p>Шаблоны custom config. Активные шаблоны выдаются по кругу при запросах подписки.</p>
         </div>
         <form method="post" action="/rotation/reset">
           <button class="secondary" type="submit">Сбросить ротацию</button>
         </form>
       </div>
 
-      <div class="card">
+      <div class="card summary">
         <span class="pill">Активных: {{ configs | selectattr("is_active") | list | length }}</span>
         <span class="pill">Всего: {{ configs | length }}</span>
         <span class="pill">Последний индекс: {{ state.last_index if state else -1 }}</span>
@@ -46,8 +163,17 @@
 
       {% for config in configs %}
       <section class="card">
-        <form method="post" action="/configs/{{ config.id }}">
-          <div class="row">
+        <form method="post" action="/configs/{{ config.id }}" data-json-form>
+          <div class="template-title">
+            <h2>{{ config.name }}</h2>
+            <div class="template-meta">
+              <span class="pill"><span class="dot {{ 'on' if config.is_active else 'off' }}"></span>{{ "в выдаче" if config.is_active else "выключен" }}</span>
+              <span class="pill">ID {{ config.id }}</span>
+              <span class="pill">Порядок {{ config.sort_order }}</span>
+            </div>
+          </div>
+
+          <div class="grid">
             <div>
               <label>Название</label>
               <input type="text" name="name" value="{{ config.name }}" required>
@@ -57,31 +183,45 @@
               <input type="number" name="sort_order" value="{{ config.sort_order }}">
             </div>
             <div>
-              <label>Статус</label>
-              <label class="{{ 'on' if config.is_active else 'off' }}">
+              <label>Выдача</label>
+              <label class="switch">
                 <input type="checkbox" name="is_active" value="true" {% if config.is_active %}checked{% endif %}>
-                {{ "активен" if config.is_active else "выключен" }}
+                участвует в ротации
               </label>
             </div>
           </div>
-          <label>JSON template</label>
-          <textarea name="content" spellcheck="false">{{ config.content }}</textarea>
+
+          <div class="editor-head">
+            <label>JSON template</label>
+            <div class="editor-actions">
+              <button class="secondary" type="button" data-format-json>Форматировать</button>
+              <button class="secondary" type="button" data-copy-json>Скопировать</button>
+              <span class="status" data-json-status>не проверено</span>
+            </div>
+          </div>
+          <textarea name="content" spellcheck="false" data-json-editor>{{ config.content }}</textarea>
+
           <div class="actions">
             <button type="submit">Сохранить</button>
           </div>
         </form>
+
         <div class="actions">
-          <form method="post" action="/configs/{{ config.id }}/clone"><button class="secondary" type="submit">Клонировать</button></form>
-          <form method="post" action="/configs/{{ config.id }}/delete" onsubmit="return confirm('Удалить конфиг?')"><button class="danger" type="submit">Удалить</button></form>
+          <form method="post" action="/configs/{{ config.id }}/clone">
+            <button class="secondary" type="submit">Клонировать</button>
+          </form>
+          <form method="post" action="/configs/{{ config.id }}/delete" onsubmit="return confirm('Удалить конфиг?')">
+            <button class="danger" type="submit">Удалить</button>
+          </form>
         </div>
-        <p class="muted">ID {{ config.id }} · обновлен {{ config.updated_at }}</p>
+        <p class="muted">Обновлен {{ config.updated_at }}</p>
       </section>
       {% endfor %}
 
       <section class="card">
-        <h2>Добавить конфиг</h2>
-        <form method="post" action="/configs">
-          <div class="row">
+        <h2>Добавить шаблон</h2>
+        <form method="post" action="/configs" data-json-form>
+          <div class="grid">
             <div>
               <label>Название</label>
               <input type="text" name="name" placeholder="Config A" required>
@@ -91,17 +231,79 @@
               <input type="number" name="sort_order" value="100">
             </div>
             <div>
-              <label>Статус</label>
-              <label><input type="checkbox" name="is_active" value="true" checked> активен</label>
+              <label>Выдача</label>
+              <label class="switch"><input type="checkbox" name="is_active" value="true" checked> участвует в ротации</label>
             </div>
           </div>
-          <label>JSON template</label>
-          <textarea name="content" spellcheck="false" placeholder='{"remarks": "{{REMARKS}}"}' required></textarea>
+
+          <div class="editor-head">
+            <label>JSON template</label>
+            <div class="editor-actions">
+              <button class="secondary" type="button" data-format-json>Форматировать</button>
+              <button class="secondary" type="button" data-copy-json>Скопировать</button>
+              <span class="status" data-json-status>не проверено</span>
+            </div>
+          </div>
+          <textarea name="content" spellcheck="false" data-json-editor placeholder='{"remarks": "{{REMARKS}}"}' required></textarea>
+
           <div class="actions">
             <button type="submit">Добавить</button>
           </div>
         </form>
       </section>
     </main>
+
+    <script>
+      function validateEditor(editor, status) {
+        try {
+          JSON.parse(editor.value);
+          status.textContent = "JSON валиден";
+          status.className = "status ok";
+          return true;
+        } catch (error) {
+          status.textContent = "Ошибка JSON: " + error.message;
+          status.className = "status error";
+          return false;
+        }
+      }
+
+      document.querySelectorAll("[data-json-form]").forEach((form) => {
+        const editor = form.querySelector("[data-json-editor]");
+        const status = form.querySelector("[data-json-status]");
+
+        if (editor.value.trim()) {
+          validateEditor(editor, status);
+        }
+
+        editor.addEventListener("input", () => validateEditor(editor, status));
+
+        form.querySelector("[data-format-json]").addEventListener("click", () => {
+          try {
+            editor.value = JSON.stringify(JSON.parse(editor.value), null, 2);
+            validateEditor(editor, status);
+          } catch (error) {
+            validateEditor(editor, status);
+          }
+        });
+
+        form.querySelector("[data-copy-json]").addEventListener("click", async () => {
+          await navigator.clipboard.writeText(editor.value);
+          const previous = status.textContent;
+          status.textContent = "Скопировано";
+          status.className = "status ok";
+          setTimeout(() => {
+            status.textContent = previous;
+            validateEditor(editor, status);
+          }, 1200);
+        });
+
+        form.addEventListener("submit", (event) => {
+          if (!validateEditor(editor, status)) {
+            event.preventDefault();
+            editor.focus();
+          }
+        });
+      });
+    </script>
   </body>
 </html>

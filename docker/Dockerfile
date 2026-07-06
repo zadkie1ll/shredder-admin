@@ -7,5 +7,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY alembic.ini .
 
-CMD ["python3", "-m", "app.main"]
+CMD ["sh", "-c", "alembic upgrade head && python3 -m app.main"]

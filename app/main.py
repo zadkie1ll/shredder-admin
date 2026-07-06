@@ -1,4 +1,5 @@
 from pathlib import Path
+from secrets import compare_digest
 
 import orjson
 import uvicorn
@@ -10,23 +11,52 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPBasic
+from fastapi.security import HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
 from app.config import settings
 from app.db import AdminConfigRotationState
 from app.db import AdminConfigTemplate
-from app.db import init_db
 from app.db import session_scope
 
 
 app = FastAPI(title="Shredder Admin", version="0.1.0")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+security = HTTPBasic(auto_error=False)
 
 
 def require_admin_token(x_admin_token: str | None = Header(default=None)) -> None:
     if settings.admin_token and x_admin_token != settings.admin_token:
         raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def require_ui_auth(credentials: HTTPBasicCredentials | None = Depends(security)) -> None:
+    if not settings.ui_username and not settings.ui_password:
+        return
+
+    if not settings.ui_username or not settings.ui_password:
+        raise HTTPException(
+            status_code=500,
+            detail="Both SHREDDER_ADMIN_UI_USERNAME and SHREDDER_ADMIN_UI_PASSWORD must be set.",
+        )
+
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    username_ok = compare_digest(credentials.username, settings.ui_username)
+    password_ok = compare_digest(credentials.password, settings.ui_password)
+    if not username_ok or not password_ok:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
 
 
 def validate_json_template(content: str) -> None:
@@ -63,11 +93,10 @@ def seed_template_if_needed() -> None:
 
 @app.on_event("startup")
 def startup() -> None:
-    init_db()
     seed_template_if_needed()
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_ui_auth)])
 def index(request: Request):
     with session_scope() as session:
         configs = (
@@ -92,7 +121,7 @@ def index(request: Request):
         )
 
 
-@app.post("/configs")
+@app.post("/configs", dependencies=[Depends(require_ui_auth)])
 def create_config(
     name: str = Form(...),
     sort_order: int = Form(100),
@@ -112,7 +141,7 @@ def create_config(
     return RedirectResponse("/", status_code=303)
 
 
-@app.post("/configs/{config_id}")
+@app.post("/configs/{config_id}", dependencies=[Depends(require_ui_auth)])
 def update_config(
     config_id: int,
     name: str = Form(...),
@@ -132,7 +161,7 @@ def update_config(
     return RedirectResponse("/", status_code=303)
 
 
-@app.post("/configs/{config_id}/clone")
+@app.post("/configs/{config_id}/clone", dependencies=[Depends(require_ui_auth)])
 def clone_config(config_id: int):
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
@@ -149,7 +178,7 @@ def clone_config(config_id: int):
     return RedirectResponse("/", status_code=303)
 
 
-@app.post("/configs/{config_id}/delete")
+@app.post("/configs/{config_id}/delete", dependencies=[Depends(require_ui_auth)])
 def delete_config(config_id: int):
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
@@ -158,7 +187,7 @@ def delete_config(config_id: int):
     return RedirectResponse("/", status_code=303)
 
 
-@app.post("/rotation/reset")
+@app.post("/rotation/reset", dependencies=[Depends(require_ui_auth)])
 def reset_rotation():
     with session_scope() as session:
         state = session.get(AdminConfigRotationState, "default")

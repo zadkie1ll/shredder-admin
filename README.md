@@ -22,6 +22,29 @@ Open:
 http://127.0.0.1:8015/
 ```
 
+Database migrations are applied automatically on container startup:
+
+```bash
+alembic upgrade head
+```
+
+The JSON templates are stored in Postgres in `admin_config_templates.content`.
+
+## Protect the browser UI
+
+Before exposing the admin through a public domain, set:
+
+```env
+SHREDDER_ADMIN_UI_USERNAME="admin"
+SHREDDER_ADMIN_UI_PASSWORD="long-random-password"
+```
+
+The API token is separate and is used by `shredder-custom-config`:
+
+```env
+SHREDDER_ADMIN_TOKEN="same-token-as-in-shredder-custom-config"
+```
+
 ## Seed from current custom config
 
 ```bash

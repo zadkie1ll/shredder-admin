@@ -38,6 +38,8 @@ class Settings:
     port: int
     database_url: str
     admin_token: str | None
+    ui_username: str | None
+    ui_password: str | None
     seed_template_path: str | None
 
 
@@ -54,6 +56,8 @@ def load_settings() -> Settings:
         port=_read_int("SHREDDER_ADMIN_PORT", 8015),
         database_url=database_url,
         admin_token=os.getenv("SHREDDER_ADMIN_TOKEN") or None,
+        ui_username=os.getenv("SHREDDER_ADMIN_UI_USERNAME") or None,
+        ui_password=os.getenv("SHREDDER_ADMIN_UI_PASSWORD") or None,
         seed_template_path=os.getenv("SHREDDER_ADMIN_SEED_TEMPLATE_PATH") or None,
     )
 
