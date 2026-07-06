@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Shredder Admin</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; background: #101722; color: #e8eef8; }
+      main { max-width: 1180px; margin: 0 auto; padding: 32px 20px 64px; }
+      h1 { margin: 0 0 8px; font-size: 30px; }
+      p { color: #9db0c8; }
+      .bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+      .card { background: #172231; border: 1px solid #2b3a4f; border-radius: 18px; padding: 18px; margin: 18px 0; box-shadow: 0 18px 50px rgba(0,0,0,.18); }
+      label { display: block; margin: 12px 0 6px; color: #b6c4d6; font-weight: 600; }
+      input[type="text"], input[type="number"], textarea { width: 100%; box-sizing: border-box; background: #0d1420; color: #f5f8ff; border: 1px solid #33445d; border-radius: 12px; padding: 10px 12px; font: inherit; }
+      textarea { min-height: 360px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.45; resize: vertical; }
+      button { background: #6f75ff; color: white; border: 0; border-radius: 12px; padding: 10px 14px; font-weight: 700; cursor: pointer; }
+      button.secondary { background: #2b3a4f; }
+      button.danger { background: #d95067; }
+      .row { display: grid; grid-template-columns: 1fr 120px 130px; gap: 12px; align-items: end; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+      .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: #0d1420; color: #aebdd1; border: 1px solid #2b3a4f; }
+      .on { color: #87e39a; }
+      .off { color: #ff9eaa; }
+      .muted { color: #8393aa; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="bar">
+        <div>
+          <h1>Shredder Admin</h1>
+          <p>Ротация custom config templates для подписок.</p>
+        </div>
+        <form method="post" action="/rotation/reset">
+          <button class="secondary" type="submit">Сбросить ротацию</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <span class="pill">Активных: {{ configs | selectattr("is_active") | list | length }}</span>
+        <span class="pill">Всего: {{ configs | length }}</span>
+        <span class="pill">Последний индекс: {{ state.last_index if state else -1 }}</span>
+      </div>
+
+      {% for config in configs %}
+      <section class="card">
+        <form method="post" action="/configs/{{ config.id }}">
+          <div class="row">
+            <div>
+              <label>Название</label>
+              <input type="text" name="name" value="{{ config.name }}" required>
+            </div>
+            <div>
+              <label>Порядок</label>
+              <input type="number" name="sort_order" value="{{ config.sort_order }}">
+            </div>
+            <div>
+              <label>Статус</label>
+              <label class="{{ 'on' if config.is_active else 'off' }}">
+                <input type="checkbox" name="is_active" value="true" {% if config.is_active %}checked{% endif %}>
+                {{ "активен" if config.is_active else "выключен" }}
+              </label>
+            </div>
+          </div>
+          <label>JSON template</label>
+          <textarea name="content" spellcheck="false">{{ config.content }}</textarea>
+          <div class="actions">
+            <button type="submit">Сохранить</button>
+          </div>
+        </form>
+        <div class="actions">
+          <form method="post" action="/configs/{{ config.id }}/clone"><button class="secondary" type="submit">Клонировать</button></form>
+          <form method="post" action="/configs/{{ config.id }}/delete" onsubmit="return confirm('Удалить конфиг?')"><button class="danger" type="submit">Удалить</button></form>
+        </div>
+        <p class="muted">ID {{ config.id }} · обновлен {{ config.updated_at }}</p>
+      </section>
+      {% endfor %}
+
+      <section class="card">
+        <h2>Добавить конфиг</h2>
+        <form method="post" action="/configs">
+          <div class="row">
+            <div>
+              <label>Название</label>
+              <input type="text" name="name" placeholder="Config A" required>
+            </div>
+            <div>
+              <label>Порядок</label>
+              <input type="number" name="sort_order" value="100">
+            </div>
+            <div>
+              <label>Статус</label>
+              <label><input type="checkbox" name="is_active" value="true" checked> активен</label>
+            </div>
+          </div>
+          <label>JSON template</label>
+          <textarea name="content" spellcheck="false" placeholder='{"remarks": "{{REMARKS}}"}' required></textarea>
+          <div class="actions">
+            <button type="submit">Добавить</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
