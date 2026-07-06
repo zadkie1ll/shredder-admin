@@ -2,7 +2,7 @@ services:
   shredder-admin:
     network_mode: host
     build:
-      context: ..
+      context: .
       dockerfile: Dockerfile
     image: shredder-admin:v0.1
     restart: unless-stopped
