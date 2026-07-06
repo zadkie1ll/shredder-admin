@@ -7,6 +7,6 @@ services:
     image: shredder-admin:v0.1
     restart: unless-stopped
     env_file:
-      - ../.env
+      - ./.env
     volumes:
-      - ../seed:/app/seed:ro
+      - ./seed:/app/seed:ro
