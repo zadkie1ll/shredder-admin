@@ -3,7 +3,7 @@ services:
     network_mode: host
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     image: shredder-admin:v0.1
     restart: unless-stopped
     env_file:
