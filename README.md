@@ -22,9 +22,11 @@ Open:
 http://127.0.0.1:8015/
 ```
 
-Database migrations are applied automatically on container startup:
+Database migrations live in the shared `common` submodule and are applied
+automatically on container startup:
 
 ```bash
+cd common
 alembic upgrade head
 ```
 

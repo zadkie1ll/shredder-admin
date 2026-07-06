@@ -17,9 +17,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
 from app.config import settings
-from app.db import AdminConfigRotationState
-from app.db import AdminConfigTemplate
 from app.db import session_scope
+from common.models.db import AdminConfigRotationState
+from common.models.db import AdminConfigTemplate
 
 
 app = FastAPI(title="Shredder Admin", version="0.1.0")
