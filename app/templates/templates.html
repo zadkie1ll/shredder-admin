@@ -24,6 +24,7 @@
   <div class="stats">
     <span class="pill">Активных: {{ active_count }}</span>
     <span class="pill">Всего: {{ configs | length }}</span>
+    <span class="pill count">Закрепленных пользователей: {{ assigned_count }}</span>
     <span class="pill">Последний индекс: {{ state.last_index if state else -1 }}</span>
   </div>
 
@@ -37,6 +38,7 @@
               <h3>{{ config.name }}</h3>
               <div class="actions">
                 <span class="pill"><span class="dot {{ 'on' if config.is_active else 'off' }}" data-status-dot></span><span data-status-text>{{ "в выдаче" if config.is_active else "выключен" }}</span></span>
+                <span class="pill count"><span data-assigned-count>{{ item.assigned_count }}</span> пользователей</span>
                 <span class="pill">ID {{ config.id }}</span>
                 <span class="pill">#{{ config.sort_order }}</span>
               </div>
@@ -83,14 +85,30 @@
         const card = document.querySelector(`[data-template-card="${id}"]`);
         const dot = card.querySelector("[data-status-dot]");
         const text = card.querySelector("[data-status-text]");
+        const assignedCount = card.querySelector("[data-assigned-count]");
         const nextState = toggle.checked;
+        let clearAssignments = false;
+
+        if (!nextState) {
+          clearAssignments = confirm(
+            "Выключить шаблон из выдачи?\\n\\n" +
+            "Пользователи, закрепленные за ним, будут отвязаны и при следующем обновлении подписки получат другой активный шаблон."
+          );
+          if (!clearAssignments) {
+            toggle.checked = true;
+            return;
+          }
+        }
 
         toggle.disabled = true;
         try {
           const response = await fetch(`/configs/${id}/toggle`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ is_active: nextState }),
+            body: JSON.stringify({
+              is_active: nextState,
+              clear_assignments: clearAssignments,
+            }),
           });
 
           if (!response.ok) {
@@ -99,6 +117,10 @@
 
           dot.className = `dot ${nextState ? "on" : "off"}`;
           text.textContent = nextState ? "в выдаче" : "выключен";
+          const payload = await response.json();
+          if (assignedCount && Number.isInteger(payload.cleared_assignments) && payload.cleared_assignments > 0) {
+            assignedCount.textContent = "0";
+          }
         } catch (error) {
           toggle.checked = !nextState;
           alert("Не удалось переключить шаблон: " + error.message);

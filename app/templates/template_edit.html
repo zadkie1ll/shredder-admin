@@ -17,6 +17,7 @@
     </div>
     <div class="actions header-actions">
       <a class="button secondary" href="/templates">К списку</a>
+      <button class="secondary" type="button" onclick="history.length > 1 ? history.back() : location.href='/templates'">Назад</button>
       {% if config %}
         <form method="post" action="/configs/{{ config.id }}/delete" onsubmit="return confirm('Удалить шаблон?')">
           <button class="danger" type="submit">Удалить</button>
@@ -27,7 +28,12 @@
 
   {% if inbounds %}
     <div class="card" style="margin-bottom: 16px;">
-      <h2>Inbound-ы</h2>
+      <div class="template-head">
+        <h2>Inbound-ы</h2>
+        {% if config %}
+          <span class="pill count">{{ assigned_count }} пользователей закреплено</span>
+        {% endif %}
+      </div>
       <div class="inbound-list">
         {% for inbound in inbounds %}
           <span class="inbound-chip">{{ inbound }}</span>

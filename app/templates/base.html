@@ -105,6 +105,50 @@
         gap: 16px;
         margin-bottom: 26px;
       }
+      .app-nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 24px;
+      }
+      .nav-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: #f4f7ff;
+        font-weight: 900;
+        letter-spacing: -.02em;
+      }
+      .brand-mark {
+        display: inline-grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #747bff, #4fb7ff);
+        box-shadow: 0 12px 32px rgba(116,123,255,.32);
+      }
+      .nav-links {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .nav-link {
+        min-height: 36px;
+        padding: 8px 11px;
+        border-radius: 12px;
+        background: rgba(10,17,29,.76);
+        border: 1px solid rgba(255,255,255,.07);
+        color: #bac8dd;
+        font-weight: 800;
+      }
+      .nav-link.active {
+        color: #ffffff;
+        background: rgba(116,123,255,.18);
+        border-color: rgba(116,123,255,.42);
+      }
       .crumbs {
         display: flex;
         gap: 8px;
@@ -163,6 +207,7 @@
         font-size: 13px;
       }
       .pill.soft { background: rgba(116,123,255,.10); color: #dbe2ff; border-color: rgba(116,123,255,.28); }
+      .pill.count { background: rgba(112,227,148,.08); color: #b8f6ca; border-color: rgba(112,227,148,.24); }
       .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--muted); }
       .dot.on { background: var(--good); box-shadow: 0 0 18px rgba(112,227,148,.4); }
       .dot.off { background: var(--bad); box-shadow: 0 0 18px rgba(255,117,140,.36); }
@@ -243,7 +288,8 @@
 
       @media (max-width: 780px) {
         main { padding-top: 24px; }
-        .topbar, .hero, .template-head, .editor-head { flex-direction: column; align-items: flex-start; }
+        .topbar, .app-nav, .hero, .template-head, .editor-head { flex-direction: column; align-items: flex-start; }
+        .nav-links { justify-content: flex-start; }
         .form-grid { grid-template-columns: 1fr; }
         textarea { min-height: 380px; }
       }
@@ -252,6 +298,17 @@
   </head>
   <body>
     <main>
+      <nav class="app-nav">
+        <a class="nav-brand" href="/">
+          <span class="brand-mark">S</span>
+          <span>Shredder Admin</span>
+        </a>
+        <div class="nav-links">
+          <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">Обзор</a>
+          <a class="nav-link {% if request.url.path.startswith('/templates') %}active{% endif %}" href="/templates">Шаблоны</a>
+          <button class="secondary" type="button" onclick="history.length > 1 ? history.back() : location.href='/'">Назад</button>
+        </div>
+      </nav>
       {% block body %}{% endblock %}
     </main>
     {% block scripts %}{% endblock %}

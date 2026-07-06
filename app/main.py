@@ -14,11 +14,13 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBasic
 from fastapi.security import HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import delete
 from sqlalchemy import select
 from sqlalchemy import func
 
 from app.config import settings
 from app.db import session_scope
+from common.models.db import AdminConfigAssignment
 from common.models.db import AdminConfigRotationState
 from common.models.db import AdminConfigTemplate
 
@@ -87,7 +89,18 @@ def get_inbound_tags(content: str) -> list[str]:
     return tags
 
 
+def get_assignment_counts(session) -> dict[int, int]:
+    rows = session.execute(
+        select(
+            AdminConfigAssignment.template_id,
+            func.count(AdminConfigAssignment.user_key),
+        ).group_by(AdminConfigAssignment.template_id)
+    ).all()
+    return {template_id: count for template_id, count in rows}
+
+
 def list_configs_with_inbounds(session):
+    assignment_counts = get_assignment_counts(session)
     configs = (
         session.execute(
             select(AdminConfigTemplate).order_by(
@@ -102,6 +115,7 @@ def list_configs_with_inbounds(session):
         {
             "config": config,
             "inbounds": get_inbound_tags(config.content),
+            "assigned_count": assignment_counts.get(config.id, 0),
         }
         for config in configs
     ]
@@ -109,6 +123,23 @@ def list_configs_with_inbounds(session):
 
 def active_configs_count(configs) -> int:
     return sum(1 for item in configs if item["config"].is_active)
+
+
+def assigned_users_count(configs) -> int:
+    return sum(item["assigned_count"] for item in configs)
+
+
+def pick_next_config(session, configs: list[AdminConfigTemplate]) -> tuple[int, AdminConfigTemplate]:
+    state = session.get(AdminConfigRotationState, "default", with_for_update=True)
+    if not state:
+        state = AdminConfigRotationState(key="default", last_index=-1)
+        session.add(state)
+        session.flush()
+
+    next_index = (state.last_index + 1) % len(configs)
+    state.last_index = next_index
+    state.updated_at = func.now()
+    return next_index, configs[next_index]
 
 
 def seed_template_if_needed() -> None:
@@ -153,6 +184,7 @@ def index(request: Request):
                 "request": request,
                 "configs": configs,
                 "active_count": active_configs_count(configs),
+                "assigned_count": assigned_users_count(configs),
                 "state": state,
             },
         )
@@ -170,6 +202,7 @@ def templates_list(request: Request):
                 "request": request,
                 "configs": configs,
                 "active_count": active_configs_count(configs),
+                "assigned_count": assigned_users_count(configs),
                 "state": state,
             },
         )
@@ -201,6 +234,7 @@ def edit_template(request: Request, config_id: int):
                 "request": request,
                 "config": config,
                 "inbounds": get_inbound_tags(config.content),
+                "assigned_count": get_assignment_counts(session).get(config.id, 0),
                 "action": f"/configs/{config.id}",
             },
         )
@@ -253,6 +287,7 @@ async def toggle_config(config_id: int, request: Request):
     is_active = body.get("is_active")
     if not isinstance(is_active, bool):
         raise HTTPException(status_code=400, detail="is_active must be boolean")
+    clear_assignments = bool(body.get("clear_assignments", not is_active))
 
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
@@ -260,9 +295,18 @@ async def toggle_config(config_id: int, request: Request):
             raise HTTPException(status_code=404, detail="Config not found")
         config.is_active = is_active
         config.updated_at = func.now()
+        cleared_assignments = 0
+        if not is_active and clear_assignments:
+            result = session.execute(
+                delete(AdminConfigAssignment).where(
+                    AdminConfigAssignment.template_id == config_id
+                )
+            )
+            cleared_assignments = result.rowcount or 0
         return {
             "id": config.id,
             "is_active": config.is_active,
+            "cleared_assignments": cleared_assignments,
         }
 
 
@@ -288,6 +332,11 @@ def delete_config(config_id: int):
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
         if config:
+            session.execute(
+                delete(AdminConfigAssignment).where(
+                    AdminConfigAssignment.template_id == config_id
+                )
+            )
             session.delete(config)
     return RedirectResponse("/templates", status_code=303)
 
@@ -307,6 +356,7 @@ def reset_rotation():
 @app.get("/api/config-templates")
 def list_config_templates(_: None = Depends(require_admin_token)):
     with session_scope() as session:
+        assignment_counts = get_assignment_counts(session)
         configs = (
             session.execute(
                 select(AdminConfigTemplate).order_by(
@@ -323,6 +373,7 @@ def list_config_templates(_: None = Depends(require_admin_token)):
                 "name": config.name,
                 "is_active": config.is_active,
                 "sort_order": config.sort_order,
+                "assigned_count": assignment_counts.get(config.id, 0),
                 "updated_at": config.updated_at.isoformat() if config.updated_at else None,
             }
             for config in configs
@@ -330,7 +381,13 @@ def list_config_templates(_: None = Depends(require_admin_token)):
 
 
 @app.get("/api/config-templates/next")
-def get_next_config_template(_: None = Depends(require_admin_token)):
+def get_next_config_template(
+    user_key: str | None = None,
+    x_user_key: str | None = Header(default=None),
+    _: None = Depends(require_admin_token),
+):
+    normalized_user_key = (user_key or x_user_key or "").strip() or None
+
     with session_scope() as session:
         configs = (
             session.execute(
@@ -344,21 +401,52 @@ def get_next_config_template(_: None = Depends(require_admin_token)):
         if not configs:
             raise HTTPException(status_code=404, detail="No active config templates")
 
-        state = session.get(AdminConfigRotationState, "default", with_for_update=True)
-        if not state:
-            state = AdminConfigRotationState(key="default", last_index=-1)
-            session.add(state)
-            session.flush()
+        assignment_status = "rotated"
+        next_index = None
+        config = None
 
-        next_index = (state.last_index + 1) % len(configs)
-        state.last_index = next_index
-        config = configs[next_index]
+        if normalized_user_key:
+            assignment = session.get(
+                AdminConfigAssignment,
+                normalized_user_key,
+                with_for_update=True,
+            )
+            configs_by_id = {item.id: item for item in configs}
+            if assignment and assignment.template_id in configs_by_id:
+                config = configs_by_id[assignment.template_id]
+                next_index = configs.index(config)
+                assignment.request_count += 1
+                assignment.last_seen_at = func.now()
+                assignment.updated_at = func.now()
+                assignment_status = "existing"
+            else:
+                next_index, config = pick_next_config(session, configs)
+                if assignment:
+                    assignment.template_id = config.id
+                    assignment.request_count += 1
+                    assignment.last_seen_at = func.now()
+                    assignment.updated_at = func.now()
+                    assignment_status = "reassigned"
+                else:
+                    session.add(
+                        AdminConfigAssignment(
+                            user_key=normalized_user_key,
+                            template_id=config.id,
+                        )
+                    )
+                    assignment_status = "created"
+        else:
+            next_index, config = pick_next_config(session, configs)
+
+        assert next_index is not None
+        assert config is not None
 
         return {
             "id": config.id,
             "name": config.name,
             "index": next_index,
             "total_active": len(configs),
+            "assignment_status": assignment_status,
             "content": config.content,
         }
 

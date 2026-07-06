@@ -12,6 +12,7 @@
   <div class="stats">
     <span class="pill">Активных шаблонов: {{ active_count }}</span>
     <span class="pill">Всего шаблонов: {{ configs | length }}</span>
+    <span class="pill count">Закрепленных пользователей: {{ assigned_count }}</span>
     <span class="pill">Индекс ротации: {{ state.last_index if state else -1 }}</span>
   </div>
 
@@ -20,7 +21,7 @@
       <div>
         <span class="pill soft">Custom Config</span>
         <h2 style="margin-top: 14px;">Шаблоны</h2>
-        <p>Плитки конфигов, inbound-ы, включение/выключение из выдачи и редактор JSON.</p>
+        <p>Плитки конфигов, inbound-ы, закрепленные пользователи, включение/выключение из выдачи и редактор JSON.</p>
       </div>
       <div class="actions">
         <span class="button">Открыть</span>
@@ -31,7 +32,7 @@
       <div>
         <span class="pill">Позже</span>
         <h2 style="margin-top: 14px;">Пользователи</h2>
-        <p>Будущий раздел для управления пользователями, сегментами и выдачей разных конфигов.</p>
+        <p>Будущий раздел для управления пользователями, сегментами и ручным переносом между шаблонами.</p>
       </div>
     </div>
 
