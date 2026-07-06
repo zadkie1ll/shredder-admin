@@ -84,6 +84,22 @@ GET /api/config-templates/next?user_key=<stable-user-or-subscription-id>
 
 Alternatively pass it as `X-User-Key`.
 
+For better analytics, pass real user identifiers too. The admin will resolve
+`users.id` from the shared database by `user_id`, `telegram_id`, or `username`,
+and store the assignment with a real foreign key:
+
+```text
+GET /api/config-templates/next?username=<bot-username>&short_uuid=<sub-short-uuid>
+```
+
+Supported query params and matching headers:
+
+- `user_id` / `X-User-Id`
+- `telegram_id` / `X-Telegram-Id`
+- `username` / `X-Username`
+- `remnawave_user_uuid` / `X-Remnawave-User-Uuid`
+- `short_uuid` / `X-Short-Uuid`
+
 If the admin is unavailable, `shredder-custom-config` falls back to local
 `template.json`.
 

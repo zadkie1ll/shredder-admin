@@ -23,6 +23,7 @@ from app.db import session_scope
 from common.models.db import AdminConfigAssignment
 from common.models.db import AdminConfigRotationState
 from common.models.db import AdminConfigTemplate
+from common.models.db import User
 
 
 app = FastAPI(title="Shredder Admin", version="0.1.0")
@@ -127,6 +128,74 @@ def active_configs_count(configs) -> int:
 
 def assigned_users_count(configs) -> int:
     return sum(item["assigned_count"] for item in configs)
+
+
+def _strip_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _parse_int_optional(value: int | str | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        return int(stripped)
+    except ValueError:
+        return None
+
+
+def resolve_assignment_user(
+    session,
+    user_id: int | None,
+    telegram_id: int | None,
+    username: str | None,
+) -> User | None:
+    if user_id is not None:
+        user = session.get(User, user_id)
+        if user:
+            return user
+
+    if telegram_id is not None:
+        user = session.scalar(select(User).where(User.telegram_id == telegram_id))
+        if user:
+            return user
+
+    if username:
+        user = session.scalar(select(User).where(User.username == username))
+        if user:
+            return user
+
+    return None
+
+
+def build_assignment_key(
+    user: User | None,
+    user_key: str | None,
+    username: str | None,
+    telegram_id: int | None,
+    remnawave_user_uuid: str | None,
+    short_uuid: str | None,
+) -> str | None:
+    if user:
+        return f"user:{user.id}"
+    if user_key:
+        return user_key
+    if username:
+        return f"username:{username}"
+    if telegram_id is not None:
+        return f"telegram:{telegram_id}"
+    if remnawave_user_uuid:
+        return f"rw:{remnawave_user_uuid}"
+    if short_uuid:
+        return f"sub:{short_uuid}"
+    return None
 
 
 def pick_next_config(session, configs: list[AdminConfigTemplate]) -> tuple[int, AdminConfigTemplate]:
@@ -383,10 +452,29 @@ def list_config_templates(_: None = Depends(require_admin_token)):
 @app.get("/api/config-templates/next")
 def get_next_config_template(
     user_key: str | None = None,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+    username: str | None = None,
+    remnawave_user_uuid: str | None = None,
+    short_uuid: str | None = None,
     x_user_key: str | None = Header(default=None),
+    x_user_id: str | None = Header(default=None),
+    x_telegram_id: str | None = Header(default=None),
+    x_username: str | None = Header(default=None),
+    x_remnawave_user_uuid: str | None = Header(default=None),
+    x_short_uuid: str | None = Header(default=None),
     _: None = Depends(require_admin_token),
 ):
-    normalized_user_key = (user_key or x_user_key or "").strip() or None
+    normalized_user_key = _strip_optional(user_key) or _strip_optional(x_user_key)
+    normalized_user_id = user_id if user_id is not None else _parse_int_optional(x_user_id)
+    normalized_telegram_id = (
+        telegram_id if telegram_id is not None else _parse_int_optional(x_telegram_id)
+    )
+    normalized_username = _strip_optional(username) or _strip_optional(x_username)
+    normalized_remnawave_user_uuid = (
+        _strip_optional(remnawave_user_uuid) or _strip_optional(x_remnawave_user_uuid)
+    )
+    normalized_short_uuid = _strip_optional(short_uuid) or _strip_optional(x_short_uuid)
 
     with session_scope() as session:
         configs = (
@@ -404,17 +492,40 @@ def get_next_config_template(
         assignment_status = "rotated"
         next_index = None
         config = None
+        user = resolve_assignment_user(
+            session=session,
+            user_id=normalized_user_id,
+            telegram_id=normalized_telegram_id,
+            username=normalized_username,
+        )
+        assignment_key = build_assignment_key(
+            user=user,
+            user_key=normalized_user_key,
+            username=normalized_username,
+            telegram_id=normalized_telegram_id,
+            remnawave_user_uuid=normalized_remnawave_user_uuid,
+            short_uuid=normalized_short_uuid,
+        )
 
-        if normalized_user_key:
+        if assignment_key:
             assignment = session.get(
                 AdminConfigAssignment,
-                normalized_user_key,
+                assignment_key,
                 with_for_update=True,
             )
             configs_by_id = {item.id: item for item in configs}
             if assignment and assignment.template_id in configs_by_id:
                 config = configs_by_id[assignment.template_id]
                 next_index = configs.index(config)
+                assignment.user_id = user.id if user else assignment.user_id
+                assignment.username_snapshot = normalized_username or assignment.username_snapshot
+                assignment.telegram_id_snapshot = (
+                    normalized_telegram_id or assignment.telegram_id_snapshot
+                )
+                assignment.remnawave_user_uuid = (
+                    normalized_remnawave_user_uuid or assignment.remnawave_user_uuid
+                )
+                assignment.short_uuid = normalized_short_uuid or assignment.short_uuid
                 assignment.request_count += 1
                 assignment.last_seen_at = func.now()
                 assignment.updated_at = func.now()
@@ -423,6 +534,15 @@ def get_next_config_template(
                 next_index, config = pick_next_config(session, configs)
                 if assignment:
                     assignment.template_id = config.id
+                    assignment.user_id = user.id if user else assignment.user_id
+                    assignment.username_snapshot = normalized_username or assignment.username_snapshot
+                    assignment.telegram_id_snapshot = (
+                        normalized_telegram_id or assignment.telegram_id_snapshot
+                    )
+                    assignment.remnawave_user_uuid = (
+                        normalized_remnawave_user_uuid or assignment.remnawave_user_uuid
+                    )
+                    assignment.short_uuid = normalized_short_uuid or assignment.short_uuid
                     assignment.request_count += 1
                     assignment.last_seen_at = func.now()
                     assignment.updated_at = func.now()
@@ -430,7 +550,12 @@ def get_next_config_template(
                 else:
                     session.add(
                         AdminConfigAssignment(
-                            user_key=normalized_user_key,
+                            user_key=assignment_key,
+                            user_id=user.id if user else None,
+                            username_snapshot=normalized_username,
+                            telegram_id_snapshot=normalized_telegram_id,
+                            remnawave_user_uuid=normalized_remnawave_user_uuid,
+                            short_uuid=normalized_short_uuid,
                             template_id=config.id,
                         )
                     )
@@ -447,6 +572,8 @@ def get_next_config_template(
             "index": next_index,
             "total_active": len(configs),
             "assignment_status": assignment_status,
+            "assignment_key": assignment_key,
+            "user_id": user.id if user else None,
             "content": config.content,
         }
 
