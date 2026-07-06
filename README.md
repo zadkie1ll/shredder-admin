@@ -7,13 +7,14 @@ Small internal admin for Shredder config templates.
 - Stores custom config templates in the shared Postgres database.
 - Lets you edit templates from a browser.
 - Exposes `GET /api/config-templates/next` for round-robin template delivery.
+- Keeps stable user-to-template assignments when `user_key` is provided.
 - The response contains the raw Jinja-compatible JSON template in `content`.
 
 ## Run locally
 
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up -d --build
+docker compose up -d --build
 ```
 
 Open:
@@ -74,8 +75,21 @@ SHREDDER_ADMIN_REQUEST_TIMEOUT=5
 ```
 
 Every subscription request asks this endpoint for the next active template.
+Pass a stable per-user key to keep the same user on the same template and to
+show assigned user counters in the admin UI:
+
+```text
+GET /api/config-templates/next?user_key=<stable-user-or-subscription-id>
+```
+
+Alternatively pass it as `X-User-Key`.
+
 If the admin is unavailable, `shredder-custom-config` falls back to local
 `template.json`.
+
+When a template is disabled from the UI, assignments for that template can be
+cleared. Clients cannot be forced to refresh instantly, but on their next
+subscription update they will be assigned to another active template.
 
 ## API
 
@@ -88,4 +102,11 @@ With token:
 ```bash
 curl -H "X-Admin-Token: $SHREDDER_ADMIN_TOKEN" \
   http://127.0.0.1:8015/api/config-templates/next
+```
+
+With assignment tracking:
+
+```bash
+curl -H "X-Admin-Token: $SHREDDER_ADMIN_TOKEN" \
+  "http://127.0.0.1:8015/api/config-templates/next?user_key=telegram-123"
 ```
