@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}{{ config.name if config else "Новый шаблон" }} · Shredder Admin{% endblock %}
+
+{% block body %}
+  <nav class="crumbs">
+    <a href="/">Shredder Admin</a>
+    <span>/</span>
+    <a href="/templates">Шаблоны</a>
+    <span>/</span>
+    <span>{{ config.name if config else "Новый шаблон" }}</span>
+  </nav>
+
+  <div class="hero">
+    <div>
+      <h1>{{ config.name if config else "Новый шаблон" }}</h1>
+      <p>Редактор JSON-шаблона. Сохраняй только валидный JSON, иначе подписка не сможет получить конфиг.</p>
+    </div>
+    <div class="actions header-actions">
+      <a class="button secondary" href="/templates">К списку</a>
+      {% if config %}
+        <form method="post" action="/configs/{{ config.id }}/delete" onsubmit="return confirm('Удалить шаблон?')">
+          <button class="danger" type="submit">Удалить</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if inbounds %}
+    <div class="card" style="margin-bottom: 16px;">
+      <h2>Inbound-ы</h2>
+      <div class="inbound-list">
+        {% for inbound in inbounds %}
+          <span class="inbound-chip">{{ inbound }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  <section class="card">
+    <form method="post" action="{{ action }}" data-json-form>
+      <div class="form-grid">
+        <div>
+          <label>Название</label>
+          <input type="text" name="name" value="{{ config.name if config else '' }}" placeholder="Yandex CDN strict" required>
+        </div>
+        <div>
+          <label>Порядок</label>
+          <input type="number" name="sort_order" value="{{ config.sort_order if config else 100 }}">
+        </div>
+        <div>
+          <label>Выдача</label>
+          <label class="pill" style="justify-content: space-between; width: 100%; border-radius: 14px; min-height: 45px;">
+            <span>участвует в ротации</span>
+            <input type="checkbox" name="is_active" value="true" {% if not config or config.is_active %}checked{% endif %}>
+          </label>
+        </div>
+      </div>
+
+      <div class="editor-head">
+        <label>JSON template</label>
+        <div class="actions">
+          <button class="secondary" type="button" data-format-json>Форматировать</button>
+          <button class="secondary" type="button" data-copy-json>Скопировать</button>
+          <span class="status" data-json-status>не проверено</span>
+        </div>
+      </div>
+      <textarea name="content" spellcheck="false" data-json-editor placeholder='{"remarks": "{{REMARKS}}"}' required>{{ config.content if config else '' }}</textarea>
+
+      <div class="actions" style="margin-top: 14px;">
+        <button type="submit">Сохранить</button>
+        {% if config %}
+          <button class="secondary" type="submit" formaction="/configs/{{ config.id }}/clone">Клонировать</button>
+        {% endif %}
+      </div>
+    </form>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    function validateEditor(editor, status) {
+      try {
+        JSON.parse(editor.value);
+        status.textContent = "JSON валиден";
+        status.className = "status ok";
+        return true;
+      } catch (error) {
+        status.textContent = "Ошибка JSON: " + error.message;
+        status.className = "status error";
+        return false;
+      }
+    }
+
+    document.querySelectorAll("[data-json-form]").forEach((form) => {
+      const editor = form.querySelector("[data-json-editor]");
+      const status = form.querySelector("[data-json-status]");
+
+      if (editor.value.trim()) {
+        validateEditor(editor, status);
+      }
+
+      editor.addEventListener("input", () => validateEditor(editor, status));
+
+      form.querySelector("[data-format-json]").addEventListener("click", () => {
+        try {
+          editor.value = JSON.stringify(JSON.parse(editor.value), null, 2);
+          validateEditor(editor, status);
+        } catch (error) {
+          validateEditor(editor, status);
+        }
+      });
+
+      form.querySelector("[data-copy-json]").addEventListener("click", async () => {
+        await navigator.clipboard.writeText(editor.value);
+        const previous = status.textContent;
+        status.textContent = "Скопировано";
+        status.className = "status ok";
+        setTimeout(() => {
+          status.textContent = previous;
+          validateEditor(editor, status);
+        }, 1200);
+      });
+
+      form.addEventListener("submit", (event) => {
+        if (!validateEditor(editor, status)) {
+          event.preventDefault();
+          editor.focus();
+        }
+      });
+    });
+  </script>
+{% endblock %}

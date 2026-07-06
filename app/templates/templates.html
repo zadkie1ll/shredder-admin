@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Шаблоны · Shredder Admin{% endblock %}
+
+{% block body %}
+  <nav class="crumbs">
+    <a href="/">Shredder Admin</a>
+    <span>/</span>
+    <span>Шаблоны</span>
+  </nav>
+
+  <div class="hero">
+    <div>
+      <h1>Шаблоны</h1>
+      <p>Каждая плитка — отдельный custom config. Активные шаблоны участвуют в круговой выдаче подписки.</p>
+    </div>
+    <div class="actions header-actions">
+      <form method="post" action="/rotation/reset">
+        <button class="secondary" type="submit">Сбросить ротацию</button>
+      </form>
+      <a class="button" href="/templates/new">Добавить шаблон</a>
+    </div>
+  </div>
+
+  <div class="stats">
+    <span class="pill">Активных: {{ active_count }}</span>
+    <span class="pill">Всего: {{ configs | length }}</span>
+    <span class="pill">Последний индекс: {{ state.last_index if state else -1 }}</span>
+  </div>
+
+  <section class="grid template-grid">
+    {% for item in configs %}
+      {% set config = item.config %}
+      <article class="card template-card" data-template-card="{{ config.id }}">
+        <div>
+          <div class="template-head">
+            <a class="template-link" href="/templates/{{ config.id }}">
+              <h3>{{ config.name }}</h3>
+              <div class="actions">
+                <span class="pill"><span class="dot {{ 'on' if config.is_active else 'off' }}" data-status-dot></span><span data-status-text>{{ "в выдаче" if config.is_active else "выключен" }}</span></span>
+                <span class="pill">ID {{ config.id }}</span>
+                <span class="pill">#{{ config.sort_order }}</span>
+              </div>
+            </a>
+
+            <label class="switch" title="Включить или выключить из выдачи">
+              <input type="checkbox" data-template-toggle="{{ config.id }}" {% if config.is_active %}checked{% endif %}>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <p class="small muted">Inbound-ы</p>
+          <div class="inbound-list">
+            {% for inbound in item.inbounds %}
+              <span class="inbound-chip">{{ inbound }}</span>
+            {% else %}
+              <span class="inbound-chip">нет inbound-ов</span>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="actions" style="margin-top: 18px;">
+          <a class="button secondary" href="/templates/{{ config.id }}">Редактировать</a>
+          <form method="post" action="/configs/{{ config.id }}/clone">
+            <button class="secondary" type="submit">Клонировать</button>
+          </form>
+        </div>
+      </article>
+    {% else %}
+      <div class="card">
+        <h2>Шаблонов пока нет</h2>
+        <p>Добавь первый JSON-шаблон, и он начнет участвовать в выдаче после включения.</p>
+        <a class="button" href="/templates/new">Добавить шаблон</a>
+      </div>
+    {% endfor %}
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    document.querySelectorAll("[data-template-toggle]").forEach((toggle) => {
+      toggle.addEventListener("change", async () => {
+        const id = toggle.dataset.templateToggle;
+        const card = document.querySelector(`[data-template-card="${id}"]`);
+        const dot = card.querySelector("[data-status-dot]");
+        const text = card.querySelector("[data-status-text]");
+        const nextState = toggle.checked;
+
+        toggle.disabled = true;
+        try {
+          const response = await fetch(`/configs/${id}/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_active: nextState }),
+          });
+
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+
+          dot.className = `dot ${nextState ? "on" : "off"}`;
+          text.textContent = nextState ? "в выдаче" : "выключен";
+        } catch (error) {
+          toggle.checked = !nextState;
+          alert("Не удалось переключить шаблон: " + error.message);
+        } finally {
+          toggle.disabled = false;
+        }
+      });
+    });
+  </script>
+{% endblock %}

@@ -15,6 +15,7 @@ from fastapi.security import HTTPBasic
 from fastapi.security import HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
+from sqlalchemy import func
 
 from app.config import settings
 from app.db import session_scope
@@ -66,6 +67,50 @@ def validate_json_template(content: str) -> None:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
 
 
+def get_inbound_tags(content: str) -> list[str]:
+    try:
+        payload = orjson.loads(content)
+    except orjson.JSONDecodeError:
+        return []
+
+    inbounds = payload.get("inbounds", []) if isinstance(payload, dict) else []
+    if not isinstance(inbounds, list):
+        return []
+
+    tags = []
+    for inbound in inbounds:
+        if not isinstance(inbound, dict):
+            continue
+        tag = inbound.get("tag")
+        if isinstance(tag, str) and tag:
+            tags.append(tag)
+    return tags
+
+
+def list_configs_with_inbounds(session):
+    configs = (
+        session.execute(
+            select(AdminConfigTemplate).order_by(
+                AdminConfigTemplate.sort_order.asc(),
+                AdminConfigTemplate.id.asc(),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "config": config,
+            "inbounds": get_inbound_tags(config.content),
+        }
+        for config in configs
+    ]
+
+
+def active_configs_count(configs) -> int:
+    return sum(1 for item in configs if item["config"].is_active)
+
+
 def seed_template_if_needed() -> None:
     if not settings.seed_template_path:
         return
@@ -99,16 +144,7 @@ def startup() -> None:
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_ui_auth)])
 def index(request: Request):
     with session_scope() as session:
-        configs = (
-            session.execute(
-                select(AdminConfigTemplate).order_by(
-                    AdminConfigTemplate.sort_order.asc(),
-                    AdminConfigTemplate.id.asc(),
-                )
-            )
-            .scalars()
-            .all()
-        )
+        configs = list_configs_with_inbounds(session)
         state = session.get(AdminConfigRotationState, "default")
 
         return templates.TemplateResponse(
@@ -116,7 +152,56 @@ def index(request: Request):
             {
                 "request": request,
                 "configs": configs,
+                "active_count": active_configs_count(configs),
                 "state": state,
+            },
+        )
+
+
+@app.get("/templates", response_class=HTMLResponse, dependencies=[Depends(require_ui_auth)])
+def templates_list(request: Request):
+    with session_scope() as session:
+        configs = list_configs_with_inbounds(session)
+        state = session.get(AdminConfigRotationState, "default")
+
+        return templates.TemplateResponse(
+            "templates.html",
+            {
+                "request": request,
+                "configs": configs,
+                "active_count": active_configs_count(configs),
+                "state": state,
+            },
+        )
+
+
+@app.get("/templates/new", response_class=HTMLResponse, dependencies=[Depends(require_ui_auth)])
+def new_template(request: Request):
+    return templates.TemplateResponse(
+        "template_edit.html",
+        {
+            "request": request,
+            "config": None,
+            "inbounds": [],
+            "action": "/configs",
+        },
+    )
+
+
+@app.get("/templates/{config_id}", response_class=HTMLResponse, dependencies=[Depends(require_ui_auth)])
+def edit_template(request: Request, config_id: int):
+    with session_scope() as session:
+        config = session.get(AdminConfigTemplate, config_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="Config not found")
+
+        return templates.TemplateResponse(
+            "template_edit.html",
+            {
+                "request": request,
+                "config": config,
+                "inbounds": get_inbound_tags(config.content),
+                "action": f"/configs/{config.id}",
             },
         )
 
@@ -138,7 +223,7 @@ def create_config(
                 is_active=is_active,
             )
         )
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/templates", status_code=303)
 
 
 @app.post("/configs/{config_id}", dependencies=[Depends(require_ui_auth)])
@@ -158,7 +243,27 @@ def update_config(
         config.sort_order = sort_order
         config.content = content
         config.is_active = is_active
-    return RedirectResponse("/", status_code=303)
+        config.updated_at = func.now()
+    return RedirectResponse(f"/templates/{config_id}", status_code=303)
+
+
+@app.post("/configs/{config_id}/toggle", dependencies=[Depends(require_ui_auth)])
+async def toggle_config(config_id: int, request: Request):
+    body = await request.json()
+    is_active = body.get("is_active")
+    if not isinstance(is_active, bool):
+        raise HTTPException(status_code=400, detail="is_active must be boolean")
+
+    with session_scope() as session:
+        config = session.get(AdminConfigTemplate, config_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="Config not found")
+        config.is_active = is_active
+        config.updated_at = func.now()
+        return {
+            "id": config.id,
+            "is_active": config.is_active,
+        }
 
 
 @app.post("/configs/{config_id}/clone", dependencies=[Depends(require_ui_auth)])
@@ -175,7 +280,7 @@ def clone_config(config_id: int):
                 is_active=False,
             )
         )
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/templates", status_code=303)
 
 
 @app.post("/configs/{config_id}/delete", dependencies=[Depends(require_ui_auth)])
@@ -184,7 +289,7 @@ def delete_config(config_id: int):
         config = session.get(AdminConfigTemplate, config_id)
         if config:
             session.delete(config)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/templates", status_code=303)
 
 
 @app.post("/rotation/reset", dependencies=[Depends(require_ui_auth)])
@@ -196,7 +301,7 @@ def reset_rotation():
             session.add(state)
         else:
             state.last_index = -1
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/templates", status_code=303)
 
 
 @app.get("/api/config-templates")
