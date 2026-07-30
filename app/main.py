@@ -485,21 +485,27 @@ async def check_wl01_template(config_id: int) -> None:
             for ok, error in results
             if not ok
         )
-        if (
-            settings.wl01_auto_disable_enabled
-            and config.is_active
-            and not config.is_fallback
-            and len(servers) > 0
-            and available_count == 0
-            and not checker_failed
-        ):
-            config.is_active = False
-            config.wl01_disabled_at = func.now()
-            session.execute(
-                delete(AdminConfigAssignment).where(
-                    AdminConfigAssignment.template_id == config.id
+        if settings.wl01_auto_disable_enabled and not config.is_fallback:
+            if (
+                config.is_active
+                and len(servers) > 0
+                and available_count == 0
+                and not checker_failed
+            ):
+                config.is_active = False
+                config.wl01_disabled_at = func.now()
+                session.execute(
+                    delete(AdminConfigAssignment).where(
+                        AdminConfigAssignment.template_id == config.id
+                    )
                 )
-            )
+            elif (
+                not config.is_active
+                and config.wl01_disabled_at is not None
+                and available_count > 0
+            ):
+                config.is_active = True
+                config.wl01_disabled_at = None
 
 
 async def wl01_checker_loop() -> None:
@@ -858,6 +864,8 @@ def update_config(
         config.sort_order = sort_order
         config.content = normalized_content
         config.is_active = True if config.is_fallback else is_active
+        if config.is_active:
+            config.wl01_disabled_at = None
         config.wl01_check_enabled = wl01_check_enabled
         config.wl01_check_uuid = normalized_wl01_uuid
         config.updated_at = func.now()
@@ -879,6 +887,8 @@ async def toggle_config(config_id: int, request: Request):
         if config.is_fallback and not is_active:
             raise HTTPException(status_code=400, detail="Fallback config cannot be disabled")
         config.is_active = is_active
+        if config.is_active:
+            config.wl01_disabled_at = None
         config.updated_at = func.now()
         cleared_assignments = 0
         if not is_active and clear_assignments:

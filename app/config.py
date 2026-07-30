@@ -72,7 +72,7 @@ def load_settings() -> Settings:
         wl01_check_timeout_seconds=_read_int("SHREDDER_ADMIN_WL01_CHECK_TIMEOUT_SECONDS", 5),
         wl01_auto_disable_enabled=os.getenv(
             "SHREDDER_ADMIN_WL01_AUTO_DISABLE_ENABLED",
-            "false",
+            "true",
         ).lower()
         not in {"0", "false", "no", "off"},
         wl01_xray_path=os.getenv("SHREDDER_ADMIN_WL01_XRAY_PATH", "xray"),
