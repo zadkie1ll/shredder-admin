@@ -224,6 +224,9 @@ def apply_wl01_uuid(content: str, wl01_uuid: str | None) -> str:
                 continue
             for user in users:
                 if isinstance(user, dict):
+                    current_id = user.get("id")
+                    if isinstance(current_id, str) and current_id.startswith("{{"):
+                        continue
                     user["id"] = wl01_uuid
                     changed = True
 
@@ -819,12 +822,13 @@ def create_config(
 ):
     validate_json_template(content)
     normalized_wl01_uuid = validate_uuid(wl01_check_uuid)
+    normalized_content = apply_wl01_uuid(content, normalized_wl01_uuid)
     with session_scope() as session:
         session.add(
             AdminConfigTemplate(
                 name=name,
                 sort_order=sort_order,
-                content=content,
+                content=normalized_content,
                 is_active=is_active,
                 wl01_check_enabled=wl01_check_enabled,
                 wl01_check_uuid=normalized_wl01_uuid,
@@ -845,13 +849,14 @@ def update_config(
 ):
     validate_json_template(content)
     normalized_wl01_uuid = validate_uuid(wl01_check_uuid)
+    normalized_content = apply_wl01_uuid(content, normalized_wl01_uuid)
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
         if not config:
             raise HTTPException(status_code=404, detail="Config not found")
         config.name = name
         config.sort_order = sort_order
-        config.content = content
+        config.content = normalized_content
         config.is_active = True if config.is_fallback else is_active
         config.wl01_check_enabled = wl01_check_enabled
         config.wl01_check_uuid = normalized_wl01_uuid
@@ -900,7 +905,7 @@ def clone_config(config_id: int):
             AdminConfigTemplate(
                 name=f"{config.name} copy",
                 sort_order=config.sort_order + 1,
-                content=config.content,
+                content=apply_wl01_uuid(config.content, config.wl01_check_uuid),
                 is_active=False,
                 is_fallback=False,
                 wl01_check_enabled=config.wl01_check_enabled,
