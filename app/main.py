@@ -1,8 +1,13 @@
 import asyncio
+import contextlib
+import copy
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from secrets import compare_digest
+import socket
+import tempfile
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import orjson
@@ -193,17 +198,171 @@ def extract_wl01_servers(content: str, wl01_uuid: str | None = None) -> list[dic
     return servers
 
 
-async def tcp_probe(address: str, port: int, timeout: int) -> tuple[bool, str | None]:
+def extract_wl01_outbounds(content: str, wl01_uuid: str | None = None) -> list[dict]:
+    try:
+        payload = orjson.loads(apply_wl01_uuid(content, wl01_uuid))
+    except orjson.JSONDecodeError:
+        return []
+
+    outbounds = payload.get("outbounds", []) if isinstance(payload, dict) else []
+    if not isinstance(outbounds, list):
+        return []
+
+    return [
+        copy.deepcopy(outbound)
+        for outbound in outbounds
+        if isinstance(outbound, dict)
+        and isinstance(outbound.get("tag"), str)
+        and outbound["tag"].startswith("WL-01")
+        and outbound.get("protocol") == "vless"
+    ]
+
+
+def _free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _trim_log(output: bytes, limit: int = 800) -> str:
+    text = output.decode("utf-8", errors="replace").strip()
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
+
+
+async def _wait_for_local_port(port: int, timeout: int) -> bool:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except OSError:
+            await asyncio.sleep(0.1)
+    return False
+
+
+async def _http_proxy_probe(proxy_port: int, timeout: int) -> tuple[bool, str | None]:
+    parsed = urlsplit(settings.wl01_probe_url)
+    if parsed.scheme != "http" or not parsed.netloc:
+        return False, "checker: SHREDDER_ADMIN_WL01_PROBE_URL must be an http:// URL"
+
+    path = parsed.path or "/"
+    if parsed.query:
+        path += f"?{parsed.query}"
+
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(address, port),
+            asyncio.open_connection("127.0.0.1", proxy_port),
             timeout=timeout,
         )
+        request = (
+            f"GET {settings.wl01_probe_url} HTTP/1.1\r\n"
+            f"Host: {parsed.netloc}\r\n"
+            "User-Agent: shredder-admin-wl01-checker\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+        )
+        writer.write(request.encode("ascii"))
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
+        status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
         writer.close()
-        await writer.wait_closed()
-        return True, None
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+
+        decoded = status_line.decode("ascii", errors="replace").strip()
+        parts = decoded.split()
+        if len(parts) >= 2 and parts[0].startswith("HTTP/"):
+            try:
+                status_code = int(parts[1])
+            except ValueError:
+                status_code = 0
+            if 200 <= status_code < 400:
+                return True, None
+        return False, f"xray: probe returned {decoded or 'empty response'}"
     except Exception as exc:  # noqa: BLE001 - we store probe diagnostics for UI.
-        return False, f"{type(exc).__name__}: {exc}"
+        return False, f"xray: {type(exc).__name__}: {exc}"
+
+
+async def xray_probe(outbound: dict, timeout: int) -> tuple[bool, str | None]:
+    proxy_port = _free_local_port()
+    probe_config = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [
+            {
+                "tag": "wl01-probe-in",
+                "listen": "127.0.0.1",
+                "port": proxy_port,
+                "protocol": "http",
+                "settings": {"timeout": timeout},
+            }
+        ],
+        "outbounds": [outbound],
+        "routing": {
+            "rules": [
+                {
+                    "type": "field",
+                    "inboundTag": ["wl01-probe-in"],
+                    "outboundTag": outbound["tag"],
+                }
+            ]
+        },
+    }
+
+    process = None
+    config_path = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False) as fp:
+            config_path = fp.name
+            fp.write(orjson.dumps(probe_config))
+
+        process = await asyncio.create_subprocess_exec(
+            settings.wl01_xray_path,
+            "run",
+            "-config",
+            config_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        if not await _wait_for_local_port(
+            proxy_port,
+            settings.wl01_xray_startup_timeout_seconds,
+        ):
+            if process.returncode is None:
+                process.terminate()
+            stdout, stderr = await process.communicate()
+            log = _trim_log(stderr or stdout)
+            return False, f"checker: xray did not start probe inbound. {log}".strip()
+
+        ok, error = await _http_proxy_probe(proxy_port, timeout)
+        if ok:
+            return True, None
+
+        stdout = stderr = b""
+        if process.returncode is not None:
+            stdout, stderr = await process.communicate()
+        log = _trim_log(stderr or stdout)
+        if log:
+            error = f"{error}; {log}"
+        return False, error
+    except FileNotFoundError:
+        return False, f"checker: xray binary not found at {settings.wl01_xray_path}"
+    except Exception as exc:  # noqa: BLE001 - one probe should not stop the checker.
+        return False, f"checker: {type(exc).__name__}: {exc}"
+    finally:
+        if process and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        if config_path:
+            with contextlib.suppress(OSError):
+                Path(config_path).unlink()
 
 
 async def check_wl01_template(config_id: int) -> None:
@@ -212,22 +371,23 @@ async def check_wl01_template(config_id: int) -> None:
         if not config or not config.wl01_check_enabled:
             return
         servers = extract_wl01_servers(config.content, config.wl01_check_uuid)
+        outbounds = extract_wl01_outbounds(config.content, config.wl01_check_uuid)
 
-    if not servers:
+    if not servers or not outbounds:
         with session_scope() as session:
             config = session.get(AdminConfigTemplate, config_id)
             if config:
                 config.wl01_last_checked_at = func.now()
                 config.wl01_last_available_count = 0
                 config.wl01_last_total_count = 0
-                config.wl01_last_error = "No WL-01 outbounds found"
+                config.wl01_last_error = "No WL-01 VLESS outbounds found"
                 config.updated_at = func.now()
         return
 
     results = await asyncio.gather(
         *[
-            tcp_probe(server["address"], server["port"], settings.wl01_check_timeout_seconds)
-            for server in servers
+            xray_probe(outbound, settings.wl01_check_timeout_seconds)
+            for outbound in outbounds
         ]
     )
     available_count = sum(1 for ok, _ in results if ok)
@@ -247,7 +407,12 @@ async def check_wl01_template(config_id: int) -> None:
         config.wl01_last_error = "\n".join(failed[:12]) if failed else None
         config.updated_at = func.now()
 
-        if config.is_active and len(servers) > 0 and available_count == 0:
+        checker_failed = all(
+            error and error.startswith("checker:")
+            for ok, error in results
+            if not ok
+        )
+        if config.is_active and len(servers) > 0 and available_count == 0 and not checker_failed:
             config.is_active = False
             config.wl01_disabled_at = func.now()
             session.execute(
