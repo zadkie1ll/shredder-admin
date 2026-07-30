@@ -192,6 +192,12 @@ def remap_inbound_ports(config: dict) -> tuple[int, dict[str, int]]:
     tag_to_new: dict[str, int] = {}
     probe_port = None
 
+    api = config.get("api")
+    if isinstance(api, dict):
+        listen = api.get("listen")
+        if isinstance(listen, str) and listen:
+            api["listen"] = f"127.0.0.1:{free_local_port()}"
+
     for inbound in config.get("inbounds", []):
         old_port = inbound.get("port")
         new_port = free_local_port()
