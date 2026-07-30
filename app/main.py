@@ -412,7 +412,13 @@ async def check_wl01_template(config_id: int) -> None:
             for ok, error in results
             if not ok
         )
-        if config.is_active and len(servers) > 0 and available_count == 0 and not checker_failed:
+        if (
+            settings.wl01_auto_disable_enabled
+            and config.is_active
+            and len(servers) > 0
+            and available_count == 0
+            and not checker_failed
+        ):
             config.is_active = False
             config.wl01_disabled_at = func.now()
             session.execute(

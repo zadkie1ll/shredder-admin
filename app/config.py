@@ -44,6 +44,7 @@ class Settings:
     wl01_checker_enabled: bool
     wl01_check_interval_seconds: int
     wl01_check_timeout_seconds: int
+    wl01_auto_disable_enabled: bool
     wl01_xray_path: str
     wl01_probe_url: str
     wl01_xray_startup_timeout_seconds: int
@@ -69,6 +70,11 @@ def load_settings() -> Settings:
         not in {"0", "false", "no", "off"},
         wl01_check_interval_seconds=_read_int("SHREDDER_ADMIN_WL01_CHECK_INTERVAL_SECONDS", 60),
         wl01_check_timeout_seconds=_read_int("SHREDDER_ADMIN_WL01_CHECK_TIMEOUT_SECONDS", 5),
+        wl01_auto_disable_enabled=os.getenv(
+            "SHREDDER_ADMIN_WL01_AUTO_DISABLE_ENABLED",
+            "false",
+        ).lower()
+        not in {"0", "false", "no", "off"},
         wl01_xray_path=os.getenv("SHREDDER_ADMIN_WL01_XRAY_PATH", "xray"),
         wl01_probe_url=os.getenv(
             "SHREDDER_ADMIN_WL01_PROBE_URL",
