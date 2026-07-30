@@ -1148,7 +1148,6 @@ def get_next_config_template(
             "name": public_config_name(config),
             "index": next_index,
             "total_active": len(configs),
-            "using_fallback": using_fallback,
             "assignment_status": assignment_status,
             "assignment_key": assignment_key,
             "user_id": user.id if user else None,
