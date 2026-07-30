@@ -22,6 +22,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBasic
 from fastapi.security import HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from sqlalchemy import delete
 from sqlalchemy import select
 from sqlalchemy import func
@@ -38,6 +39,13 @@ from common.models.db import User
 app = FastAPI(title="Shredder Admin", version="0.1.0")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 security = HTTPBasic(auto_error=False)
+
+
+class Wl01CheckResult(BaseModel):
+    available_count: int
+    total_count: int
+    error: str | None = None
+    checker_failed: bool = False
 
 
 def validate_uuid(value: str | None) -> str | None:
@@ -438,6 +446,43 @@ async def xray_probe(outbound: dict, timeout: int) -> tuple[bool, str | None]:
                 Path(config_path).unlink()
 
 
+def apply_wl01_check_result(
+    session,
+    config: AdminConfigTemplate,
+    available_count: int,
+    total_count: int,
+    error: str | None,
+    checker_failed: bool = False,
+) -> None:
+    config.wl01_last_checked_at = func.now()
+    config.wl01_last_available_count = available_count
+    config.wl01_last_total_count = total_count
+    config.wl01_last_error = error
+    config.updated_at = func.now()
+
+    if settings.wl01_auto_disable_enabled and not config.is_fallback:
+        if (
+            config.is_active
+            and total_count > 0
+            and available_count == 0
+            and not checker_failed
+        ):
+            config.is_active = False
+            config.wl01_disabled_at = func.now()
+            session.execute(
+                delete(AdminConfigAssignment).where(
+                    AdminConfigAssignment.template_id == config.id
+                )
+            )
+        elif (
+            not config.is_active
+            and config.wl01_disabled_at is not None
+            and available_count > 0
+        ):
+            config.is_active = True
+            config.wl01_disabled_at = None
+
+
 async def check_wl01_template(config_id: int) -> None:
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
@@ -474,38 +519,19 @@ async def check_wl01_template(config_id: int) -> None:
         config = session.get(AdminConfigTemplate, config_id)
         if not config:
             return
-        config.wl01_last_checked_at = func.now()
-        config.wl01_last_available_count = available_count
-        config.wl01_last_total_count = len(servers)
-        config.wl01_last_error = "\n".join(failed[:12]) if failed else None
-        config.updated_at = func.now()
-
         checker_failed = all(
             error and error.startswith("checker:")
             for ok, error in results
             if not ok
         )
-        if settings.wl01_auto_disable_enabled and not config.is_fallback:
-            if (
-                config.is_active
-                and len(servers) > 0
-                and available_count == 0
-                and not checker_failed
-            ):
-                config.is_active = False
-                config.wl01_disabled_at = func.now()
-                session.execute(
-                    delete(AdminConfigAssignment).where(
-                        AdminConfigAssignment.template_id == config.id
-                    )
-                )
-            elif (
-                not config.is_active
-                and config.wl01_disabled_at is not None
-                and available_count > 0
-            ):
-                config.is_active = True
-                config.wl01_disabled_at = None
+        apply_wl01_check_result(
+            session=session,
+            config=config,
+            available_count=available_count,
+            total_count=len(servers),
+            error="\n".join(failed[:12]) if failed else None,
+            checker_failed=checker_failed,
+        )
 
 
 async def wl01_checker_loop() -> None:
@@ -1000,6 +1026,65 @@ def serialize_config_templates(session) -> list[dict]:
 def list_config_templates(_: None = Depends(require_admin_token)):
     with session_scope() as session:
         return serialize_config_templates(session)
+
+
+@app.get("/api/config-templates/{config_id}/wl01-check-source")
+def get_wl01_check_source(
+    config_id: int,
+    _: None = Depends(require_admin_token),
+):
+    with session_scope() as session:
+        config = session.get(AdminConfigTemplate, config_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="Config template not found")
+        return {
+            "id": config.id,
+            "name": config.name,
+            "is_active": config.is_active,
+            "is_fallback": config.is_fallback,
+            "wl01_check_enabled": config.wl01_check_enabled,
+            "wl01_check_uuid": config.wl01_check_uuid,
+            "wl01_servers": extract_wl01_servers(config.content, config.wl01_check_uuid),
+            "content": content_for_delivery(config),
+        }
+
+
+@app.post("/api/config-templates/{config_id}/wl01-check-result")
+def save_wl01_check_result(
+    config_id: int,
+    result: Wl01CheckResult,
+    _: None = Depends(require_admin_token),
+):
+    if result.available_count < 0 or result.total_count < 0:
+        raise HTTPException(status_code=400, detail="Counts must be non-negative")
+    if result.available_count > result.total_count:
+        raise HTTPException(status_code=400, detail="available_count cannot exceed total_count")
+
+    with session_scope() as session:
+        config = session.get(AdminConfigTemplate, config_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="Config template not found")
+        if not config.wl01_check_enabled:
+            raise HTTPException(status_code=400, detail="WL-01 checker is disabled for template")
+
+        apply_wl01_check_result(
+            session=session,
+            config=config,
+            available_count=result.available_count,
+            total_count=result.total_count,
+            error=result.error,
+            checker_failed=result.checker_failed,
+        )
+        return {
+            "id": config.id,
+            "is_active": config.is_active,
+            "wl01_disabled_at": (
+                config.wl01_disabled_at.isoformat() if config.wl01_disabled_at else None
+            ),
+            "wl01_last_available_count": config.wl01_last_available_count,
+            "wl01_last_total_count": config.wl01_last_total_count,
+            "wl01_last_error": config.wl01_last_error,
+        }
 
 
 @app.get("/api/ui/config-templates", dependencies=[Depends(require_ui_auth)])

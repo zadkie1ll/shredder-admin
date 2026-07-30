@@ -1,0 +1,11 @@
+services:
+  shredder-wl01-checker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: shredder-wl01-checker:v0.1
+    container_name: shredder-wl01-checker
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ./.env
