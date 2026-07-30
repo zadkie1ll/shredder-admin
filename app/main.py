@@ -163,7 +163,7 @@ def build_yacdn_https_fallback_content(source_content: str) -> str | None:
         return None
 
     fallback = copy.deepcopy(payload)
-    fallback["remarks"] = "YA CDN HTTPS WL-01 fallback"
+    fallback["remarks"] = payload.get("remarks", "{{REMARKS}}")
 
     cdn_wl01_outbound = copy.deepcopy(cdn_outbound)
     cdn_wl01_outbound["tag"] = "WL-01-YCDN-HTTPS-RU5"
@@ -233,6 +233,12 @@ def apply_wl01_uuid(content: str, wl01_uuid: str | None) -> str:
 
 def content_for_delivery(config: AdminConfigTemplate) -> str:
     return apply_wl01_uuid(config.content, config.wl01_check_uuid)
+
+
+def public_config_name(config: AdminConfigTemplate) -> str:
+    if not config.is_fallback:
+        return config.name
+    return "YA-CDN-HTTPS-MAIN"
 
 
 def extract_wl01_servers(content: str, wl01_uuid: str | None = None) -> list[dict]:
@@ -1139,7 +1145,7 @@ def get_next_config_template(
 
         return {
             "id": config.id,
-            "name": config.name,
+            "name": public_config_name(config),
             "index": next_index,
             "total_active": len(configs),
             "using_fallback": using_fallback,
