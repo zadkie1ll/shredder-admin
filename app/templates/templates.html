@@ -23,6 +23,7 @@
 
   <div class="stats">
     <span class="pill">Активных: <span data-stat-active>{{ active_count }}</span></span>
+    <span class="pill">Fallback: <span data-stat-fallback>{{ configs | selectattr("config.is_fallback") | list | length }}</span></span>
     <span class="pill">Всего: <span data-stat-total>{{ configs | length }}</span></span>
     <span class="pill count">Активных пользователей: <span data-stat-assigned>{{ assigned_count }}</span></span>
     <span class="pill">Последний индекс: <span data-stat-last-index>{{ state.last_index if state else -1 }}</span></span>
@@ -38,6 +39,9 @@
               <h3>{{ config.name }}</h3>
               <div class="actions">
                 <span class="pill"><span class="dot {{ 'on' if config.is_active else 'off' }}" data-status-dot></span><span data-status-text>{{ "в выдаче" if config.is_active else "выключен" }}</span></span>
+                {% if config.is_fallback %}
+                  <span class="pill" data-fallback-badge>fallback · защищен</span>
+                {% endif %}
                 <span class="pill count"><span data-assigned-count>{{ item.assigned_count }}</span> активных</span>
                 <span class="pill"><span data-recent-count>{{ item.recent_count }}</span> за 30 сек</span>
                 <span class="pill" data-wl01-status>
@@ -54,7 +58,12 @@
             </a>
 
             <label class="switch" title="Включить или выключить из выдачи">
-              <input type="checkbox" data-template-toggle="{{ config.id }}" {% if config.is_active %}checked{% endif %}>
+              <input
+                type="checkbox"
+                data-template-toggle="{{ config.id }}"
+                {% if config.is_active %}checked{% endif %}
+                {% if config.is_fallback %}disabled{% endif %}
+              >
               <span class="slider"></span>
             </label>
           </div>
@@ -108,6 +117,7 @@
 
     function applyTemplatesPayload(payload) {
       document.querySelector("[data-stat-active]").textContent = payload.active_count;
+      document.querySelector("[data-stat-fallback]").textContent = payload.fallback_count ?? 0;
       document.querySelector("[data-stat-total]").textContent = payload.configs.length;
       document.querySelector("[data-stat-assigned]").textContent = payload.assigned_count;
       document.querySelector("[data-stat-last-index]").textContent = payload.last_index;
@@ -124,8 +134,9 @@
         const wl01Status = card.querySelector("[data-wl01-status]");
         const wl01Error = card.querySelector("[data-wl01-error]");
 
-        if (toggle && !toggle.disabled) {
+        if (toggle) {
           toggle.checked = config.is_active;
+          toggle.disabled = Boolean(config.is_fallback);
         }
         if (dot) {
           dot.className = `dot ${config.is_active ? "on" : "off"}`;

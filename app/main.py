@@ -118,6 +118,88 @@ def get_outbound_tags(content: str) -> list[str]:
     return get_tag_list(content, "outbounds")
 
 
+def build_yacdn_https_fallback_content(source_content: str) -> str | None:
+    try:
+        payload = orjson.loads(source_content)
+    except orjson.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    outbounds = payload.get("outbounds")
+    if not isinstance(outbounds, list):
+        return None
+
+    cdn_outbound = None
+    block_outbound = None
+    for outbound in outbounds:
+        if not isinstance(outbound, dict):
+            continue
+        tag = outbound.get("tag")
+        if tag == "BLOCK":
+            block_outbound = copy.deepcopy(outbound)
+        if not isinstance(tag, str):
+            continue
+        if tag.startswith("WL-03") and "YCDN-HTTPS" in tag:
+            cdn_outbound = copy.deepcopy(outbound)
+
+    if not cdn_outbound:
+        for outbound in outbounds:
+            if not isinstance(outbound, dict):
+                continue
+            stream_settings = outbound.get("streamSettings")
+            if not isinstance(stream_settings, dict):
+                continue
+            xhttp_settings = stream_settings.get("xhttpSettings")
+            tls_settings = stream_settings.get("tlsSettings")
+            if (
+                isinstance(xhttp_settings, dict)
+                and isinstance(tls_settings, dict)
+                and xhttp_settings.get("host") == "cdn1.orpheous.ru"
+                and tls_settings.get("serverName") == "cdn1.orpheous.ru"
+            ):
+                cdn_outbound = copy.deepcopy(outbound)
+                break
+
+    if not cdn_outbound or not isinstance(cdn_outbound.get("tag"), str):
+        return None
+
+    inbound_tags = [
+        item.get("tag")
+        for item in payload.get("inbounds", [])
+        if isinstance(item, dict) and isinstance(item.get("tag"), str)
+    ]
+
+    fallback = {
+        key: copy.deepcopy(payload[key])
+        for key in ("log", "dns", "policy", "api")
+        if key in payload
+    }
+    fallback["remarks"] = "YA CDN HTTPS fallback"
+    fallback["inbounds"] = copy.deepcopy(payload.get("inbounds", []))
+    fallback["outbounds"] = [cdn_outbound]
+    rules = []
+    if block_outbound:
+        fallback["outbounds"].append(block_outbound)
+        rules.append({"network": "udp", "outboundTag": "BLOCK", "port": "443"})
+    if inbound_tags:
+        rules.append(
+            {
+                "type": "field",
+                "inboundTag": inbound_tags,
+                "outboundTag": cdn_outbound["tag"],
+            }
+        )
+    fallback["routing"] = {
+        "domainStrategy": payload.get("routing", {}).get("domainStrategy", "IPIfNonMatch")
+        if isinstance(payload.get("routing"), dict)
+        else "IPIfNonMatch",
+        "rules": rules,
+    }
+    return _json_dump_text(fallback)
+
+
 def apply_wl01_uuid(content: str, wl01_uuid: str | None) -> str:
     if not wl01_uuid:
         return content
@@ -415,6 +497,7 @@ async def check_wl01_template(config_id: int) -> None:
         if (
             settings.wl01_auto_disable_enabled
             and config.is_active
+            and not config.is_fallback
             and len(servers) > 0
             and available_count == 0
             and not checker_failed
@@ -502,7 +585,11 @@ def list_configs_with_outbounds(session):
 
 
 def active_configs_count(configs) -> int:
-    return sum(1 for item in configs if item["config"].is_active)
+    return sum(
+        1
+        for item in configs
+        if item["config"].is_active and not item["config"].is_fallback
+    )
 
 
 def assigned_users_count(configs) -> int:
@@ -615,9 +702,49 @@ def seed_template_if_needed() -> None:
         )
 
 
+def ensure_fallback_template() -> None:
+    with session_scope() as session:
+        fallback = session.scalar(
+            select(AdminConfigTemplate)
+            .where(AdminConfigTemplate.is_fallback.is_(True))
+            .order_by(AdminConfigTemplate.id.asc())
+            .limit(1)
+        )
+        if fallback:
+            fallback.is_active = True
+            fallback.updated_at = func.now()
+            return
+
+        source_templates = (
+            session.execute(
+                select(AdminConfigTemplate)
+                .where(AdminConfigTemplate.is_fallback.is_(False))
+                .order_by(AdminConfigTemplate.sort_order.desc(), AdminConfigTemplate.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+        for source in source_templates:
+            content = build_yacdn_https_fallback_content(source.content)
+            if not content:
+                continue
+            session.add(
+                AdminConfigTemplate(
+                    name="Fallback · YA CDN HTTPS only",
+                    content=content,
+                    is_active=True,
+                    is_fallback=True,
+                    wl01_check_enabled=False,
+                    sort_order=10000,
+                )
+            )
+            return
+
+
 @app.on_event("startup")
 async def startup() -> None:
     seed_template_if_needed()
+    ensure_fallback_template()
     if settings.wl01_checker_enabled:
         app.state.wl01_checker_task = asyncio.create_task(wl01_checker_loop())
 
@@ -737,7 +864,7 @@ def update_config(
         config.name = name
         config.sort_order = sort_order
         config.content = content
-        config.is_active = is_active
+        config.is_active = True if config.is_fallback else is_active
         config.wl01_check_enabled = wl01_check_enabled
         config.wl01_check_uuid = normalized_wl01_uuid
         config.updated_at = func.now()
@@ -756,6 +883,8 @@ async def toggle_config(config_id: int, request: Request):
         config = session.get(AdminConfigTemplate, config_id)
         if not config:
             raise HTTPException(status_code=404, detail="Config not found")
+        if config.is_fallback and not is_active:
+            raise HTTPException(status_code=400, detail="Fallback config cannot be disabled")
         config.is_active = is_active
         config.updated_at = func.now()
         cleared_assignments = 0
@@ -785,6 +914,7 @@ def clone_config(config_id: int):
                 sort_order=config.sort_order + 1,
                 content=config.content,
                 is_active=False,
+                is_fallback=False,
                 wl01_check_enabled=config.wl01_check_enabled,
                 wl01_check_uuid=config.wl01_check_uuid,
             )
@@ -797,6 +927,8 @@ def delete_config(config_id: int):
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
         if config:
+            if config.is_fallback:
+                raise HTTPException(status_code=400, detail="Fallback config cannot be deleted")
             session.execute(
                 delete(AdminConfigAssignment).where(
                     AdminConfigAssignment.template_id == config_id
@@ -836,6 +968,7 @@ def serialize_config_templates(session) -> list[dict]:
             "id": config.id,
             "name": config.name,
             "is_active": config.is_active,
+            "is_fallback": config.is_fallback,
             "sort_order": config.sort_order,
             "assigned_count": assignment_counts.get(config.id, 0),
             "recent_count": recent_counts.get(config.id, 0),
@@ -873,7 +1006,10 @@ def list_config_templates_for_ui():
         state = session.get(AdminConfigRotationState, "default")
         return {
             "configs": configs,
-            "active_count": sum(1 for config in configs if config["is_active"]),
+            "active_count": sum(
+                1 for config in configs if config["is_active"] and not config["is_fallback"]
+            ),
+            "fallback_count": sum(1 for config in configs if config["is_fallback"]),
             "assigned_count": sum(config["assigned_count"] for config in configs),
             "last_index": state.last_index if state else -1,
         }
@@ -911,11 +1047,28 @@ def get_next_config_template(
             session.execute(
                 select(AdminConfigTemplate)
                 .where(AdminConfigTemplate.is_active.is_(True))
+                .where(AdminConfigTemplate.is_fallback.is_(False))
                 .order_by(AdminConfigTemplate.sort_order.asc(), AdminConfigTemplate.id.asc())
             )
             .scalars()
             .all()
         )
+        using_fallback = False
+        if not configs:
+            configs = (
+                session.execute(
+                    select(AdminConfigTemplate)
+                    .where(AdminConfigTemplate.is_active.is_(True))
+                    .where(AdminConfigTemplate.is_fallback.is_(True))
+                    .order_by(
+                        AdminConfigTemplate.sort_order.asc(),
+                        AdminConfigTemplate.id.asc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            using_fallback = True
         if not configs:
             raise HTTPException(status_code=404, detail="No active config templates")
 
@@ -1001,6 +1154,7 @@ def get_next_config_template(
             "name": config.name,
             "index": next_index,
             "total_active": len(configs),
+            "using_fallback": using_fallback,
             "assignment_status": assignment_status,
             "assignment_key": assignment_key,
             "user_id": user.id if user else None,

@@ -13,12 +13,17 @@
   <div class="hero">
     <div>
       <h1>{{ config.name if config else "Новый шаблон" }}</h1>
-      <p>Редактор JSON-шаблона. Сохраняй только валидный JSON, иначе подписка не сможет получить конфиг.</p>
+      <p>
+        Редактор JSON-шаблона. Сохраняй только валидный JSON, иначе подписка не сможет получить конфиг.
+        {% if config and config.is_fallback %}
+          Это защищенный fallback: он не участвует в обычной ротации и отдается только если нет активных основных шаблонов.
+        {% endif %}
+      </p>
     </div>
     <div class="actions header-actions">
       <a class="button secondary" href="/templates">К списку</a>
       <button class="secondary" type="button" onclick="history.length > 1 ? history.back() : location.href='/templates'">Назад</button>
-      {% if config %}
+      {% if config and not config.is_fallback %}
         <form method="post" action="/configs/{{ config.id }}/delete" onsubmit="return confirm('Удалить шаблон?')">
           <button class="danger" type="submit">Удалить</button>
         </form>
@@ -60,8 +65,20 @@
           <label>Выдача</label>
           <label class="pill" style="justify-content: space-between; width: 100%; border-radius: 14px; min-height: 45px;">
             <span>участвует в ротации</span>
-            <input type="checkbox" name="is_active" value="true" {% if not config or config.is_active %}checked{% endif %}>
+            <input
+              type="checkbox"
+              name="is_active"
+              value="true"
+              {% if not config or config.is_active %}checked{% endif %}
+              {% if config and config.is_fallback %}disabled{% endif %}
+            >
+            {% if config and config.is_fallback %}
+              <input type="hidden" name="is_active" value="true">
+            {% endif %}
           </label>
+          {% if config and config.is_fallback %}
+            <p class="small muted">Fallback нельзя выключить.</p>
+          {% endif %}
         </div>
       </div>
 
@@ -70,7 +87,7 @@
           <div>
             <h2>WL-01 checker</h2>
             <p class="small muted" style="margin: 8px 0 0;">
-              Раз в минуту проверяет WL-01 серверы. Если не доступен ни один сервер, шаблон выключается из выдачи.
+              Раз в минуту проверяет WL-01 серверы.
               UUID из поля ниже автоматически подставляется во все outbound-ы <code>WL-01*</code> при выдаче конфига.
             </p>
           </div>
