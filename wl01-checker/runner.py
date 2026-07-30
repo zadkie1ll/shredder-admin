@@ -31,6 +31,13 @@ XRAY_PATH = os.getenv("WL01_CHECKER_XRAY_PATH", "xray")
 USER_AGENT = os.getenv("WL01_CHECKER_USER_AGENT", "Happ/1.0")
 PROBE_HOST = os.getenv("WL01_CHECKER_PROBE_HOST", "www.google.com")
 PROBE_PORT = read_int("WL01_CHECKER_PROBE_PORT", 443)
+RUN_ONCE = os.getenv("WL01_CHECKER_RUN_ONCE", "false").lower() in {"1", "true", "yes", "on"}
+REPORT_RESULTS = os.getenv("WL01_CHECKER_REPORT_RESULTS", "true").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 
 def log(message: str) -> None:
@@ -65,6 +72,13 @@ def send_result(
     error: str | None,
     checker_failed: bool = False,
 ) -> None:
+    if not REPORT_RESULTS:
+        log(
+            f"dry-run result id={config_id} "
+            f"available={available_count}/{total_count} checker_failed={checker_failed} "
+            f"error={error!r}"
+        )
+        return
     request_json(
         "POST",
         f"{ADMIN_URL}/api/config-templates/{config_id}/wl01-check-result",
@@ -379,6 +393,8 @@ async def main() -> None:
             await run_once()
         except Exception as exc:  # noqa: BLE001
             log(f"loop failed: {type(exc).__name__}: {exc}")
+        if RUN_ONCE:
+            break
         await asyncio.sleep(INTERVAL_SECONDS)
 
 
