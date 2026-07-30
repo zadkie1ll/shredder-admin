@@ -132,13 +132,10 @@ def build_yacdn_https_fallback_content(source_content: str) -> str | None:
         return None
 
     cdn_outbound = None
-    block_outbound = None
     for outbound in outbounds:
         if not isinstance(outbound, dict):
             continue
         tag = outbound.get("tag")
-        if tag == "BLOCK":
-            block_outbound = copy.deepcopy(outbound)
         if not isinstance(tag, str):
             continue
         if tag.startswith("WL-03") and "YCDN-HTTPS" in tag:
@@ -165,38 +162,29 @@ def build_yacdn_https_fallback_content(source_content: str) -> str | None:
     if not cdn_outbound or not isinstance(cdn_outbound.get("tag"), str):
         return None
 
-    inbound_tags = [
-        item.get("tag")
-        for item in payload.get("inbounds", [])
-        if isinstance(item, dict) and isinstance(item.get("tag"), str)
-    ]
+    fallback = copy.deepcopy(payload)
+    fallback["remarks"] = "YA CDN HTTPS WL-01 fallback"
 
-    fallback = {
-        key: copy.deepcopy(payload[key])
-        for key in ("log", "dns", "policy", "api")
-        if key in payload
-    }
-    fallback["remarks"] = "YA CDN HTTPS fallback"
-    fallback["inbounds"] = copy.deepcopy(payload.get("inbounds", []))
-    fallback["outbounds"] = [cdn_outbound]
-    rules = []
-    if block_outbound:
-        fallback["outbounds"].append(block_outbound)
-        rules.append({"network": "udp", "outboundTag": "BLOCK", "port": "443"})
-    if inbound_tags:
-        rules.append(
-            {
-                "type": "field",
-                "inboundTag": inbound_tags,
-                "outboundTag": cdn_outbound["tag"],
-            }
-        )
-    fallback["routing"] = {
-        "domainStrategy": payload.get("routing", {}).get("domainStrategy", "IPIfNonMatch")
-        if isinstance(payload.get("routing"), dict)
-        else "IPIfNonMatch",
-        "rules": rules,
-    }
+    cdn_wl01_outbound = copy.deepcopy(cdn_outbound)
+    cdn_wl01_outbound["tag"] = "WL-01-YCDN-HTTPS-RU5"
+
+    fallback_outbounds = []
+    inserted_cdn = False
+    for outbound in fallback.get("outbounds", []):
+        if not isinstance(outbound, dict):
+            fallback_outbounds.append(outbound)
+            continue
+        tag = outbound.get("tag")
+        if isinstance(tag, str) and tag.startswith("WL-01"):
+            if not inserted_cdn:
+                fallback_outbounds.append(cdn_wl01_outbound)
+                inserted_cdn = True
+            continue
+        fallback_outbounds.append(outbound)
+
+    if not inserted_cdn:
+        fallback_outbounds.insert(0, cdn_wl01_outbound)
+    fallback["outbounds"] = fallback_outbounds
     return _json_dump_text(fallback)
 
 
