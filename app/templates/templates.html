@@ -40,6 +40,14 @@
                 <span class="pill"><span class="dot {{ 'on' if config.is_active else 'off' }}" data-status-dot></span><span data-status-text>{{ "в выдаче" if config.is_active else "выключен" }}</span></span>
                 <span class="pill count"><span data-assigned-count>{{ item.assigned_count }}</span> активных</span>
                 <span class="pill"><span data-recent-count>{{ item.recent_count }}</span> за 30 сек</span>
+                <span class="pill" data-wl01-status>
+                  WL-01:
+                  {% if config.wl01_check_enabled %}
+                    {{ config.wl01_last_available_count if config.wl01_last_available_count is not none else "?" }}/{{ config.wl01_last_total_count if config.wl01_last_total_count is not none else item.wl01_servers | length }}
+                  {% else %}
+                    выкл.
+                  {% endif %}
+                </span>
                 <span class="pill">ID {{ config.id }}</span>
                 <span class="pill">#{{ config.sort_order }}</span>
               </div>
@@ -59,6 +67,11 @@
               <span class="tag-chip">нет outbound-ов</span>
             {% endfor %}
           </div>
+          {% if config.wl01_last_error %}
+            <p class="small muted" data-wl01-error style="color: var(--bad); margin-bottom: 0;">{{ config.wl01_last_error.split("\n")[0] }}</p>
+          {% else %}
+            <p class="small muted" data-wl01-error style="display: none; color: var(--bad); margin-bottom: 0;"></p>
+          {% endif %}
         </div>
 
         <div class="actions" style="margin-top: 18px;">
@@ -108,6 +121,8 @@
         const text = card.querySelector("[data-status-text]");
         const assignedCount = card.querySelector("[data-assigned-count]");
         const recentCount = card.querySelector("[data-recent-count]");
+        const wl01Status = card.querySelector("[data-wl01-status]");
+        const wl01Error = card.querySelector("[data-wl01-error]");
 
         if (toggle && !toggle.disabled) {
           toggle.checked = config.is_active;
@@ -123,6 +138,16 @@
         }
         if (recentCount) {
           recentCount.textContent = config.recent_count;
+        }
+        if (wl01Status) {
+          wl01Status.textContent = config.wl01_check_enabled
+            ? `WL-01: ${config.wl01_last_available_count ?? "?"}/${config.wl01_last_total_count ?? config.wl01_servers.length}`
+            : "WL-01: выкл.";
+        }
+        if (wl01Error) {
+          const firstError = (config.wl01_last_error || "").split("\\n")[0];
+          wl01Error.textContent = firstError;
+          wl01Error.style.display = firstError ? "" : "none";
         }
         renderOutboundTags(card, config.outbounds);
       });

@@ -65,6 +65,56 @@
         </div>
       </div>
 
+      <div class="card" style="margin-top: 16px; padding: 16px; background: rgba(10,17,29,.48);">
+        <div class="template-head">
+          <div>
+            <h2>WL-01 checker</h2>
+            <p class="small muted" style="margin: 8px 0 0;">
+              Раз в минуту проверяет WL-01 серверы. Если не доступен ни один сервер, шаблон выключается из выдачи.
+              UUID из поля ниже автоматически подставляется во все outbound-ы <code>WL-01*</code> при выдаче конфига.
+            </p>
+          </div>
+          <label class="pill" style="justify-content: space-between; min-width: 180px; border-radius: 14px; min-height: 45px;">
+            <span>чекер включен</span>
+            <input type="checkbox" name="wl01_check_enabled" value="true" {% if config and config.wl01_check_enabled %}checked{% endif %}>
+          </label>
+        </div>
+
+        <label>UUID для WL-01</label>
+        <input
+          type="text"
+          name="wl01_check_uuid"
+          value="{{ config.wl01_check_uuid if config and config.wl01_check_uuid else '' }}"
+          placeholder="49c2a86b-686a-401b-b1a7-9ee48625c237"
+        >
+
+        {% if config %}
+          <div class="stats" style="margin-bottom: 0;">
+            <span class="pill">
+              WL-01:
+              {{ config.wl01_last_available_count if config.wl01_last_available_count is not none else "?" }}/{{ config.wl01_last_total_count if config.wl01_last_total_count is not none else wl01_servers | length }}
+              живых
+            </span>
+            <span class="pill">Проверка: {{ config.wl01_last_checked_at if config.wl01_last_checked_at else "еще не было" }}</span>
+            {% if config.wl01_disabled_at %}
+              <span class="pill" style="color: var(--bad); border-color: rgba(255,117,140,.35);">авто-выключен: {{ config.wl01_disabled_at }}</span>
+            {% endif %}
+          </div>
+          {% if config.wl01_last_error %}
+            <pre class="small" style="white-space: pre-wrap; color: var(--bad); background: #0a111d; border: 1px solid rgba(255,117,140,.24); border-radius: 14px; padding: 12px;">{{ config.wl01_last_error }}</pre>
+          {% endif %}
+        {% endif %}
+
+        <p class="small muted">Найденные WL-01 серверы</p>
+        <div class="tag-list">
+          {% for server in wl01_servers %}
+            <span class="tag-chip">{{ server.tag }} · {{ server.address }}:{{ server.port }}</span>
+          {% else %}
+            <span class="tag-chip">WL-01 серверы не найдены</span>
+          {% endfor %}
+        </div>
+      </div>
+
       <div class="editor-head">
         <label>JSON template</label>
         <div class="actions">

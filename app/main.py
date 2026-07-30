@@ -1,7 +1,9 @@
+import asyncio
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from secrets import compare_digest
+from uuid import UUID
 
 import orjson
 import uvicorn
@@ -32,6 +34,16 @@ from common.models.db import User
 app = FastAPI(title="Shredder Admin", version="0.1.0")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 security = HTTPBasic(auto_error=False)
+
+
+def validate_uuid(value: str | None) -> str | None:
+    value = _strip_optional(value)
+    if not value:
+        return None
+    try:
+        return str(UUID(value))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid WL-01 UUID: {value}") from exc
 
 
 def require_admin_token(x_admin_token: str | None = Header(default=None)) -> None:
@@ -73,6 +85,10 @@ def validate_json_template(content: str) -> None:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
 
 
+def _json_dump_text(payload) -> str:
+    return orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode("utf-8")
+
+
 def get_tag_list(content: str, section: str) -> list[str]:
     try:
         payload = orjson.loads(content)
@@ -95,6 +111,170 @@ def get_tag_list(content: str, section: str) -> list[str]:
 
 def get_outbound_tags(content: str) -> list[str]:
     return get_tag_list(content, "outbounds")
+
+
+def apply_wl01_uuid(content: str, wl01_uuid: str | None) -> str:
+    if not wl01_uuid:
+        return content
+
+    try:
+        payload = orjson.loads(content)
+    except orjson.JSONDecodeError:
+        return content
+
+    if not isinstance(payload, dict):
+        return content
+
+    outbounds = payload.get("outbounds")
+    if not isinstance(outbounds, list):
+        return content
+
+    changed = False
+    for outbound in outbounds:
+        if not isinstance(outbound, dict):
+            continue
+        tag = outbound.get("tag")
+        if not isinstance(tag, str) or not tag.startswith("WL-01"):
+            continue
+        settings = outbound.get("settings")
+        if not isinstance(settings, dict):
+            continue
+        vnext = settings.get("vnext")
+        if not isinstance(vnext, list):
+            continue
+        for server in vnext:
+            if not isinstance(server, dict):
+                continue
+            users = server.get("users")
+            if not isinstance(users, list):
+                continue
+            for user in users:
+                if isinstance(user, dict):
+                    user["id"] = wl01_uuid
+                    changed = True
+
+    return _json_dump_text(payload) if changed else content
+
+
+def content_for_delivery(config: AdminConfigTemplate) -> str:
+    return apply_wl01_uuid(config.content, config.wl01_check_uuid)
+
+
+def extract_wl01_servers(content: str, wl01_uuid: str | None = None) -> list[dict]:
+    try:
+        payload = orjson.loads(apply_wl01_uuid(content, wl01_uuid))
+    except orjson.JSONDecodeError:
+        return []
+
+    outbounds = payload.get("outbounds", []) if isinstance(payload, dict) else []
+    if not isinstance(outbounds, list):
+        return []
+
+    servers: list[dict] = []
+    for outbound in outbounds:
+        if not isinstance(outbound, dict):
+            continue
+        tag = outbound.get("tag")
+        if not isinstance(tag, str) or not tag.startswith("WL-01"):
+            continue
+        settings = outbound.get("settings")
+        if not isinstance(settings, dict):
+            continue
+        vnext = settings.get("vnext")
+        if not isinstance(vnext, list):
+            continue
+        for server in vnext:
+            if not isinstance(server, dict):
+                continue
+            address = server.get("address")
+            port = server.get("port")
+            if isinstance(address, str) and isinstance(port, int):
+                servers.append({"tag": tag, "address": address, "port": port})
+    return servers
+
+
+async def tcp_probe(address: str, port: int, timeout: int) -> tuple[bool, str | None]:
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(address, port),
+            timeout=timeout,
+        )
+        writer.close()
+        await writer.wait_closed()
+        return True, None
+    except Exception as exc:  # noqa: BLE001 - we store probe diagnostics for UI.
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+async def check_wl01_template(config_id: int) -> None:
+    with session_scope() as session:
+        config = session.get(AdminConfigTemplate, config_id)
+        if not config or not config.wl01_check_enabled:
+            return
+        servers = extract_wl01_servers(config.content, config.wl01_check_uuid)
+
+    if not servers:
+        with session_scope() as session:
+            config = session.get(AdminConfigTemplate, config_id)
+            if config:
+                config.wl01_last_checked_at = func.now()
+                config.wl01_last_available_count = 0
+                config.wl01_last_total_count = 0
+                config.wl01_last_error = "No WL-01 outbounds found"
+                config.updated_at = func.now()
+        return
+
+    results = await asyncio.gather(
+        *[
+            tcp_probe(server["address"], server["port"], settings.wl01_check_timeout_seconds)
+            for server in servers
+        ]
+    )
+    available_count = sum(1 for ok, _ in results if ok)
+    failed = [
+        f'{server["tag"]} {server["address"]}:{server["port"]} -> {error}'
+        for server, (ok, error) in zip(servers, results, strict=True)
+        if not ok
+    ]
+
+    with session_scope() as session:
+        config = session.get(AdminConfigTemplate, config_id)
+        if not config:
+            return
+        config.wl01_last_checked_at = func.now()
+        config.wl01_last_available_count = available_count
+        config.wl01_last_total_count = len(servers)
+        config.wl01_last_error = "\n".join(failed[:12]) if failed else None
+        config.updated_at = func.now()
+
+        if config.is_active and len(servers) > 0 and available_count == 0:
+            config.is_active = False
+            config.wl01_disabled_at = func.now()
+            session.execute(
+                delete(AdminConfigAssignment).where(
+                    AdminConfigAssignment.template_id == config.id
+                )
+            )
+
+
+async def wl01_checker_loop() -> None:
+    while True:
+        try:
+            with session_scope() as session:
+                config_ids = (
+                    session.execute(
+                        select(AdminConfigTemplate.id)
+                        .where(AdminConfigTemplate.wl01_check_enabled.is_(True))
+                    )
+                    .scalars()
+                    .all()
+                )
+            for config_id in config_ids:
+                await check_wl01_template(config_id)
+        except Exception as exc:  # noqa: BLE001 - background task must keep running.
+            print(f"WL-01 checker failed: {type(exc).__name__}: {exc}", flush=True)
+
+        await asyncio.sleep(settings.wl01_check_interval_seconds)
 
 
 def get_active_assignment_counts(session) -> dict[int, int]:
@@ -142,6 +322,7 @@ def list_configs_with_outbounds(session):
         {
             "config": config,
             "outbounds": get_outbound_tags(config.content),
+            "wl01_servers": extract_wl01_servers(config.content, config.wl01_check_uuid),
             "assigned_count": assignment_counts.get(config.id, 0),
             "recent_count": recent_counts.get(config.id, 0),
         }
@@ -264,8 +445,21 @@ def seed_template_if_needed() -> None:
 
 
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
     seed_template_if_needed()
+    if settings.wl01_checker_enabled:
+        app.state.wl01_checker_task = asyncio.create_task(wl01_checker_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    task = getattr(app.state, "wl01_checker_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 @app.get("/", dependencies=[Depends(require_ui_auth)])
@@ -295,13 +489,14 @@ def templates_list(request: Request):
 def new_template(request: Request):
     return templates.TemplateResponse(
         "template_edit.html",
-        {
-            "request": request,
-            "config": None,
-            "outbounds": [],
-            "assigned_count": 0,
-            "recent_count": 0,
-            "action": "/configs",
+            {
+                "request": request,
+                "config": None,
+                "outbounds": [],
+                "wl01_servers": [],
+                "assigned_count": 0,
+                "recent_count": 0,
+                "action": "/configs",
         },
     )
 
@@ -319,6 +514,7 @@ def edit_template(request: Request, config_id: int):
                 "request": request,
                 "config": config,
                 "outbounds": get_outbound_tags(config.content),
+                "wl01_servers": extract_wl01_servers(config.content, config.wl01_check_uuid),
                 "assigned_count": get_active_assignment_counts(session).get(config.id, 0),
                 "recent_count": get_recent_assignment_counts(session).get(config.id, 0),
                 "action": f"/configs/{config.id}",
@@ -332,8 +528,11 @@ def create_config(
     sort_order: int = Form(100),
     content: str = Form(...),
     is_active: bool = Form(False),
+    wl01_check_enabled: bool = Form(False),
+    wl01_check_uuid: str | None = Form(None),
 ):
     validate_json_template(content)
+    normalized_wl01_uuid = validate_uuid(wl01_check_uuid)
     with session_scope() as session:
         session.add(
             AdminConfigTemplate(
@@ -341,6 +540,8 @@ def create_config(
                 sort_order=sort_order,
                 content=content,
                 is_active=is_active,
+                wl01_check_enabled=wl01_check_enabled,
+                wl01_check_uuid=normalized_wl01_uuid,
             )
         )
     return RedirectResponse("/templates", status_code=303)
@@ -353,8 +554,11 @@ def update_config(
     sort_order: int = Form(100),
     content: str = Form(...),
     is_active: bool = Form(False),
+    wl01_check_enabled: bool = Form(False),
+    wl01_check_uuid: str | None = Form(None),
 ):
     validate_json_template(content)
+    normalized_wl01_uuid = validate_uuid(wl01_check_uuid)
     with session_scope() as session:
         config = session.get(AdminConfigTemplate, config_id)
         if not config:
@@ -363,6 +567,8 @@ def update_config(
         config.sort_order = sort_order
         config.content = content
         config.is_active = is_active
+        config.wl01_check_enabled = wl01_check_enabled
+        config.wl01_check_uuid = normalized_wl01_uuid
         config.updated_at = func.now()
     return RedirectResponse(f"/templates/{config_id}", status_code=303)
 
@@ -408,6 +614,8 @@ def clone_config(config_id: int):
                 sort_order=config.sort_order + 1,
                 content=config.content,
                 is_active=False,
+                wl01_check_enabled=config.wl01_check_enabled,
+                wl01_check_uuid=config.wl01_check_uuid,
             )
         )
     return RedirectResponse("/templates", status_code=303)
@@ -461,6 +669,20 @@ def serialize_config_templates(session) -> list[dict]:
             "assigned_count": assignment_counts.get(config.id, 0),
             "recent_count": recent_counts.get(config.id, 0),
             "outbounds": get_outbound_tags(config.content),
+            "wl01_check_enabled": config.wl01_check_enabled,
+            "wl01_check_uuid": config.wl01_check_uuid,
+            "wl01_last_checked_at": (
+                config.wl01_last_checked_at.isoformat()
+                if config.wl01_last_checked_at
+                else None
+            ),
+            "wl01_last_available_count": config.wl01_last_available_count,
+            "wl01_last_total_count": config.wl01_last_total_count,
+            "wl01_last_error": config.wl01_last_error,
+            "wl01_disabled_at": (
+                config.wl01_disabled_at.isoformat() if config.wl01_disabled_at else None
+            ),
+            "wl01_servers": extract_wl01_servers(config.content, config.wl01_check_uuid),
             "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         }
         for config in configs
@@ -611,7 +833,7 @@ def get_next_config_template(
             "assignment_status": assignment_status,
             "assignment_key": assignment_key,
             "user_id": user.id if user else None,
-            "content": config.content,
+            "content": content_for_delivery(config),
         }
 
 

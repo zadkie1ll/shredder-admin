@@ -41,6 +41,9 @@ class Settings:
     ui_username: str | None
     ui_password: str | None
     seed_template_path: str | None
+    wl01_checker_enabled: bool
+    wl01_check_interval_seconds: int
+    wl01_check_timeout_seconds: int
 
 
 def load_settings() -> Settings:
@@ -59,6 +62,10 @@ def load_settings() -> Settings:
         ui_username=os.getenv("SHREDDER_ADMIN_UI_USERNAME") or None,
         ui_password=os.getenv("SHREDDER_ADMIN_UI_PASSWORD") or None,
         seed_template_path=os.getenv("SHREDDER_ADMIN_SEED_TEMPLATE_PATH") or None,
+        wl01_checker_enabled=os.getenv("SHREDDER_ADMIN_WL01_CHECKER_ENABLED", "true").lower()
+        not in {"0", "false", "no", "off"},
+        wl01_check_interval_seconds=_read_int("SHREDDER_ADMIN_WL01_CHECK_INTERVAL_SECONDS", 60),
+        wl01_check_timeout_seconds=_read_int("SHREDDER_ADMIN_WL01_CHECK_TIMEOUT_SECONDS", 5),
     )
 
 
