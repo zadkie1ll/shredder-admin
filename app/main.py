@@ -7,7 +7,6 @@ from pathlib import Path
 from secrets import compare_digest
 import socket
 import tempfile
-from urllib.parse import urlsplit
 from uuid import UUID
 
 import orjson
@@ -321,13 +320,9 @@ async def _wait_for_local_port(port: int, timeout: int) -> bool:
 
 
 async def _http_proxy_probe(proxy_port: int, timeout: int) -> tuple[bool, str | None]:
-    parsed = urlsplit(settings.wl01_probe_url)
-    if parsed.scheme != "http" or not parsed.netloc:
-        return False, "checker: SHREDDER_ADMIN_WL01_PROBE_URL must be an http:// URL"
-
-    path = parsed.path or "/"
-    if parsed.query:
-        path += f"?{parsed.query}"
+    target = settings.wl01_probe_connect_target.strip()
+    if ":" not in target:
+        return False, "checker: SHREDDER_ADMIN_WL01_PROBE_CONNECT_TARGET must be host:port"
 
     try:
         reader, writer = await asyncio.wait_for(
@@ -335,10 +330,9 @@ async def _http_proxy_probe(proxy_port: int, timeout: int) -> tuple[bool, str | 
             timeout=timeout,
         )
         request = (
-            f"GET {settings.wl01_probe_url} HTTP/1.1\r\n"
-            f"Host: {parsed.netloc}\r\n"
-            "User-Agent: shredder-admin-wl01-checker\r\n"
-            "Connection: close\r\n"
+            f"CONNECT {target} HTTP/1.1\r\n"
+            f"Host: {target}\r\n"
+            "Proxy-Connection: keep-alive\r\n"
             "\r\n"
         )
         writer.write(request.encode("ascii"))

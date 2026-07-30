@@ -46,7 +46,7 @@ class Settings:
     wl01_check_timeout_seconds: int
     wl01_auto_disable_enabled: bool
     wl01_xray_path: str
-    wl01_probe_url: str
+    wl01_probe_connect_target: str
     wl01_xray_startup_timeout_seconds: int
 
 
@@ -76,9 +76,9 @@ def load_settings() -> Settings:
         ).lower()
         not in {"0", "false", "no", "off"},
         wl01_xray_path=os.getenv("SHREDDER_ADMIN_WL01_XRAY_PATH", "xray"),
-        wl01_probe_url=os.getenv(
-            "SHREDDER_ADMIN_WL01_PROBE_URL",
-            "http://connectivitycheck.gstatic.com/generate_204",
+        wl01_probe_connect_target=os.getenv(
+            "SHREDDER_ADMIN_WL01_PROBE_CONNECT_TARGET",
+            "www.google.com:443",
         ),
         wl01_xray_startup_timeout_seconds=_read_int(
             "SHREDDER_ADMIN_WL01_XRAY_STARTUP_TIMEOUT_SECONDS",
