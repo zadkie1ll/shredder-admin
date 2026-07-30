@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from secrets import compare_digest
 import socket
+import ssl
 import tempfile
 from uuid import UUID
 
@@ -322,30 +323,59 @@ async def _wait_for_local_port(port: int, timeout: int) -> bool:
     return False
 
 
-async def _http_proxy_probe(proxy_port: int, timeout: int) -> tuple[bool, str | None]:
+def _http_proxy_tls_probe_sync(proxy_port: int, timeout: int) -> tuple[bool, str | None]:
     target = settings.wl01_probe_connect_target.strip()
     if ":" not in target:
         return False, "checker: SHREDDER_ADMIN_WL01_PROBE_CONNECT_TARGET must be host:port"
+    host, port_text = target.rsplit(":", 1)
+    try:
+        int(port_text)
+    except ValueError:
+        return False, "checker: SHREDDER_ADMIN_WL01_PROBE_CONNECT_TARGET port must be numeric"
 
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection("127.0.0.1", proxy_port),
-            timeout=timeout,
-        )
-        request = (
-            f"CONNECT {target} HTTP/1.1\r\n"
-            f"Host: {target}\r\n"
-            "Proxy-Connection: keep-alive\r\n"
-            "\r\n"
-        )
-        writer.write(request.encode("ascii"))
-        await asyncio.wait_for(writer.drain(), timeout=timeout)
-        status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
-        writer.close()
-        with contextlib.suppress(Exception):
-            await writer.wait_closed()
+        with socket.create_connection(("127.0.0.1", proxy_port), timeout=timeout) as raw_sock:
+            raw_sock.settimeout(timeout)
+            request = (
+                f"CONNECT {target} HTTP/1.1\r\n"
+                f"Host: {target}\r\n"
+                "Proxy-Connection: keep-alive\r\n"
+                "\r\n"
+            )
+            raw_sock.sendall(request.encode("ascii"))
+            response = b""
+            while b"\r\n\r\n" not in response and len(response) < 4096:
+                chunk = raw_sock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
 
-        decoded = status_line.decode("ascii", errors="replace").strip()
+            status_line = response.split(b"\r\n", 1)[0]
+            decoded = status_line.decode("ascii", errors="replace").strip()
+            parts = decoded.split()
+            if len(parts) < 2 or not parts[0].startswith("HTTP/"):
+                return False, f"xray: probe returned {decoded or 'empty response'}"
+            try:
+                status_code = int(parts[1])
+            except ValueError:
+                status_code = 0
+            if not 200 <= status_code < 400:
+                return False, f"xray: probe returned {decoded or 'empty response'}"
+
+            context = ssl.create_default_context()
+            with context.wrap_socket(raw_sock, server_hostname=host) as tls_sock:
+                tls_sock.settimeout(timeout)
+                tls_sock.sendall(
+                    (
+                        "HEAD /generate_204 HTTP/1.1\r\n"
+                        f"Host: {host}\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                    ).encode("ascii")
+                )
+                tls_response = tls_sock.recv(64)
+
+        decoded = tls_response.decode("ascii", errors="replace").strip()
         parts = decoded.split()
         if len(parts) >= 2 and parts[0].startswith("HTTP/"):
             try:
@@ -357,6 +387,10 @@ async def _http_proxy_probe(proxy_port: int, timeout: int) -> tuple[bool, str | 
         return False, f"xray: probe returned {decoded or 'empty response'}"
     except Exception as exc:  # noqa: BLE001 - we store probe diagnostics for UI.
         return False, f"xray: {type(exc).__name__}: {exc}"
+
+
+async def _http_proxy_probe(proxy_port: int, timeout: int) -> tuple[bool, str | None]:
+    return await asyncio.to_thread(_http_proxy_tls_probe_sync, proxy_port, timeout)
 
 
 async def xray_probe(outbound: dict, timeout: int) -> tuple[bool, str | None]:
