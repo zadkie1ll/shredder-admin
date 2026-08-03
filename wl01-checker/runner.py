@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import copy
 import os
+import signal
 from pathlib import Path
 import socket
 import ssl
@@ -310,6 +311,7 @@ async def run_xray_probe(config: dict, probe_port: int) -> tuple[bool, str | Non
             config_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         if not await wait_for_local_port(probe_port, XRAY_STARTUP_TIMEOUT_SECONDS):
             if process.returncode is None:
@@ -337,11 +339,13 @@ async def run_xray_probe(config: dict, probe_port: int) -> tuple[bool, str | Non
         return False, f"{type(exc).__name__}: {exc}"
     finally:
         if process and process.returncode is None:
-            process.terminate()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
             try:
                 await asyncio.wait_for(process.wait(), timeout=2)
             except asyncio.TimeoutError:
-                process.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
                 await process.wait()
         if config_path:
             with contextlib.suppress(OSError):
