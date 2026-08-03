@@ -230,13 +230,13 @@ def remap_inbound_ports(config: dict) -> tuple[int, str, dict[str, int]]:
     return probe_port, probe_tag, tag_to_new
 
 
-def force_probe_to_wl01(config: dict, probe_tag: str, wl_tag: str) -> None:
+def force_probe_to_wl_balancer(config: dict, probe_tag: str) -> None:
     config.setdefault("routing", {}).setdefault("rules", []).insert(
         0,
         {
             "type": "field",
             "inboundTag": [probe_tag],
-            "outboundTag": wl_tag,
+            "balancerTag": "WL-BALANCER",
         },
     )
 
@@ -374,7 +374,7 @@ async def check_template(template: dict, entry_proxy: dict) -> None:
         force_wl_routing(config)
         keep_single_wl01(config, tag)
         probe_port, probe_tag, _ = remap_inbound_ports(config)
-        force_probe_to_wl01(config, probe_tag, tag)
+        force_probe_to_wl_balancer(config, probe_tag)
         ok, error = await run_xray_probe(config, probe_port)
         if ok:
             available += 1
