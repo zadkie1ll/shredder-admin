@@ -297,7 +297,13 @@ async def run_xray_probe(config: dict, probe_port: int) -> tuple[bool, str | Non
             stderr=asyncio.subprocess.PIPE,
         )
         if not await wait_for_local_port(probe_port, XRAY_STARTUP_TIMEOUT_SECONDS):
-            stdout, stderr = await process.communicate()
+            if process.returncode is None:
+                process.terminate()
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=2)
+            except asyncio.TimeoutError:
+                process.kill()
+                stdout, stderr = await process.communicate()
             return False, f"xray did not start probe inbound: {trim_log(stderr or stdout)}"
 
         ok, error = await asyncio.to_thread(socks_tls_probe, probe_port)
