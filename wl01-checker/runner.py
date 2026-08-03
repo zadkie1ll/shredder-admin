@@ -92,16 +92,7 @@ def send_result(
     )
 
 
-def extract_vless_user_id(outbound: dict) -> str | None:
-    for vnext in outbound.get("settings", {}).get("vnext", []):
-        for user in vnext.get("users", []):
-            user_id = user.get("id")
-            if isinstance(user_id, str) and user_id:
-                return user_id
-    return None
-
-
-def fetch_entry_proxy() -> tuple[dict, str]:
+def fetch_entry_proxy() -> dict:
     if not SUBSCRIPTION_URL:
         raise RuntimeError("WL01_CHECKER_SUBSCRIPTION_URL is not set")
     payload = request_json("GET", SUBSCRIPTION_URL)
@@ -109,10 +100,7 @@ def fetch_entry_proxy() -> tuple[dict, str]:
         raise RuntimeError("Subscription response must be a non-empty JSON list")
     for outbound in payload[0].get("outbounds", []):
         if outbound.get("tag") == "proxy" and outbound.get("protocol") == "vless":
-            user_id = extract_vless_user_id(outbound)
-            if not user_id:
-                raise RuntimeError("Subscription proxy does not contain a VLESS user id")
-            return outbound, user_id
+            return outbound
     raise RuntimeError("Subscription does not contain vless outbound with tag=proxy")
 
 
@@ -142,13 +130,9 @@ def trim_log(output: bytes, limit: int = 1000) -> str:
     return text[-limit:]
 
 
-def render_template_content(source: dict, default_wl_uuid: str | None = None) -> dict:
+def render_template_content(source: dict) -> dict:
     content = source["content"]
-    wl_uuid = (
-        source.get("wl01_check_uuid")
-        or default_wl_uuid
-        or "00000000-0000-4000-8000-000000000000"
-    )
+    wl_uuid = source.get("wl01_check_uuid") or "00000000-0000-4000-8000-000000000000"
     rendered = (
         content.replace("{{VLESS_USER}}", wl_uuid)
         .replace("{{ENTRY_NAME}}", "proxy")
@@ -378,11 +362,9 @@ def wl01_tags(config: dict) -> list[str]:
     ]
 
 
-async def check_template(template: dict, entry_proxy: dict, subscription_uuid: str) -> None:
+async def check_template(template: dict, entry_proxy: dict) -> None:
     source = get_template_source(template["id"])
-    if source.get("is_active"):
-        source["wl01_check_uuid"] = subscription_uuid
-    base_config = render_template_content(source, default_wl_uuid=subscription_uuid)
+    base_config = render_template_content(source)
     tags = wl01_tags(base_config)
     if not tags:
         send_result(template["id"], 0, 0, "No WL-01 outbounds found", checker_failed=False)
@@ -410,7 +392,7 @@ async def check_template(template: dict, entry_proxy: dict, subscription_uuid: s
 
 async def run_once() -> None:
     templates = list_templates()
-    entry_proxy, subscription_uuid = fetch_entry_proxy()
+    entry_proxy = fetch_entry_proxy()
     enabled = [
         item
         for item in templates
@@ -418,7 +400,7 @@ async def run_once() -> None:
     ]
     for template in enabled:
         try:
-            await check_template(template, entry_proxy, subscription_uuid)
+            await check_template(template, entry_proxy)
         except (urllib.error.URLError, RuntimeError, OSError, TimeoutError) as exc:
             log(f"template id={template.get('id')} checker failed: {type(exc).__name__}: {exc}")
             with contextlib.suppress(Exception):
