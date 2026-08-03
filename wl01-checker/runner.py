@@ -187,10 +187,11 @@ def keep_single_wl01(config: dict, wl_tag: str) -> None:
             balancer["fallbackTag"] = "LOOP-02"
 
 
-def remap_inbound_ports(config: dict) -> tuple[int, dict[str, int]]:
+def remap_inbound_ports(config: dict) -> tuple[int, str, dict[str, int]]:
     old_to_new: dict[int, int] = {}
     tag_to_new: dict[str, int] = {}
     probe_port = None
+    probe_tag = None
 
     api = config.get("api")
     if isinstance(api, dict):
@@ -210,6 +211,7 @@ def remap_inbound_ports(config: dict) -> tuple[int, dict[str, int]]:
             tag_to_new[tag] = new_port
         if inbound.get("protocol") in {"mixed", "socks"} and probe_port is None:
             probe_port = new_port
+            probe_tag = tag
 
     for outbound in config.get("outbounds", []):
         if outbound.get("protocol") != "socks":
@@ -223,7 +225,20 @@ def remap_inbound_ports(config: dict) -> tuple[int, dict[str, int]]:
 
     if probe_port is None:
         raise RuntimeError("No mixed/socks inbound found for probe")
-    return probe_port, tag_to_new
+    if not probe_tag:
+        raise RuntimeError("Probe inbound does not have a tag")
+    return probe_port, probe_tag, tag_to_new
+
+
+def force_probe_to_wl01(config: dict, probe_tag: str, wl_tag: str) -> None:
+    config.setdefault("routing", {}).setdefault("rules", []).insert(
+        0,
+        {
+            "type": "field",
+            "inboundTag": [probe_tag],
+            "outboundTag": wl_tag,
+        },
+    )
 
 
 def socks_tls_probe(proxy_port: int) -> tuple[bool, str | None]:
@@ -358,7 +373,8 @@ async def check_template(template: dict, entry_proxy: dict) -> None:
         replace_entry_proxy(config, entry_proxy)
         force_wl_routing(config)
         keep_single_wl01(config, tag)
-        probe_port, _ = remap_inbound_ports(config)
+        probe_port, probe_tag, _ = remap_inbound_ports(config)
+        force_probe_to_wl01(config, probe_tag, tag)
         ok, error = await run_xray_probe(config, probe_port)
         if ok:
             available += 1
